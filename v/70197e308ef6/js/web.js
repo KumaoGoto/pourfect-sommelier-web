@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const WEB_VERSION='1.0.0';
+const WEB_VERSION='1.1.1';
 const SITE_URL='https://pourfect-sommelier.kumao.app/';
 const LOCAL=/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
 const API=LOCAL&&new URLSearchParams(location.search).get('ranking')==='local'?'http://127.0.0.1:8792':'https://pourfectsommelier-ranking.saikyo-eigo.workers.dev';

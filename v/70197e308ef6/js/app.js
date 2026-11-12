@@ -44,6 +44,13 @@ const T = {
   tokF: 205,
   tokDip: 0.5,
   waterGain: 0.8,
+  bgmGain: 0.15,
+  bgmDuck: 0.5,
+  bgmJudge: 0.4,
+  bgmFade: 2.5,
+  bgmLoop: [4.0200, 162.9684],
+  bgmRate: 32000,
+  bgmShelf: [12250, 10],
   dripQ: 0.6e-6,
   dropVol: 0.05e-6,
   tiltPerScreen: 60 * DEG,
@@ -673,6 +680,7 @@ function auInit(){
   if (AU.ctx){ auResume(); return; }
   const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
   try { auBuild(new AC()); } catch (e) { AU.ctx = AU.out = AU.pour = null; console.error('audio', e); }
+  auBgmPrep();
 }
 function auBuild(ctx){
   AU.ctx = ctx;
@@ -696,6 +704,57 @@ function auBuild(ctx){
   WATER.forEach((o, i) => { if (o.data) auWaterStart(i); });
 }
 function auSetOn(on){ AU.on = on; if (AU.out) AU.out.gain.setTargetAtTime(on ? 0.9 : 0, AU.ctx.currentTime, 0.05); }
+const BGM_SRC = (typeof window !== 'undefined' && window.PS_BGM) || 'assets/audio/pourfect-bgm-1.m4a';
+const BGM = { bytes: null, buf: null, shelf: false, src: null, gain: null, want: -1, busy: false };
+setTimeout(() => {
+  const get = BGM_SRC.startsWith('data:')
+    ? Promise.resolve().then(() => { const t = atob(BGM_SRC.slice(BGM_SRC.indexOf(',') + 1)), u = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) u[i] = t.charCodeAt(i); return u.buffer; })
+    : fetch(BGM_SRC).then(r => { if (!r.ok) throw new Error('BGM ' + r.status); return r.arrayBuffer(); });
+  get.then(b => { BGM.bytes = b; auBgmPrep(); }).catch(e => console.warn('bgm', e));
+}, 1200);
+function auBgmPrep(){
+  if (!AU.ctx || !AU.out || !BGM.bytes || BGM.buf || BGM.busy) return;
+  BGM.busy = true;
+  const bytes = BGM.bytes; BGM.bytes = null;
+  auBgmDecode(bytes)
+    .then(buf => (buf.sampleRate === AU.ctx.sampleRate ? Promise.resolve(false) : auBgmLinear(buf.sampleRate).catch(() => false)).then(sh => { BGM.buf = buf; BGM.shelf = sh; BGM.busy = false; auBgmStart(); }))
+    .catch(e => { BGM.busy = false; console.warn('bgm', e); });
+}
+function auBgmDecode(bytes){
+  const dec = (ctx, b) => new Promise((ok, ng) => { const p = ctx.decodeAudioData(b, ok, ng); if (p && p.then) p.then(ok, ng); });
+  let off = null;
+  try { const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext; if (OAC && T.bgmRate) off = new OAC(2, 1, T.bgmRate); } catch (e) { off = null; }
+  if (!off) return dec(AU.ctx, bytes);
+  const copy = bytes.slice(0);
+  return dec(off, bytes).then(b => b.sampleRate === T.bgmRate ? b : Promise.reject(new Error('rate ' + b.sampleRate))).catch(() => dec(AU.ctx, copy));
+}
+function auBgmLinear(rate){
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext; if (!OAC) return Promise.resolve(false);
+  const out = AU.ctx.sampleRate, len = Math.round(rate * 0.2), b = AU.ctx.createBuffer(1, len, rate), d = b.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.sin(TAU * 10000 * i / rate);
+  const off = new OAC(1, Math.round(out * 0.2), out), s = off.createBufferSource(); s.buffer = b; s.connect(off.destination); s.start();
+  return new Promise((ok, ng) => { const p = off.startRendering(); off.oncomplete = e => ok(e.renderedBuffer); if (p && p.then) p.then(ok, ng); }).then(r => {
+    const x = r.getChannelData(0), a = Math.round(x.length * 0.25), z = Math.round(x.length * 0.75); let e = 0;
+    for (let i = a; i < z; i++) e += x[i] * x[i];
+    return 10 * Math.log10(e / (z - a) / 0.5) < -1;
+  });
+}
+function auBgmStart(){
+  const c = AU.ctx; if (!c || !AU.out || !BGM.buf || BGM.src) return;
+  const g = BGM.gain = c.createGain(); g.gain.value = 0; g.connect(AU.out);
+  const s = BGM.src = c.createBufferSource(); s.buffer = BGM.buf; s.loop = true; s.loopStart = T.bgmLoop[0]; s.loopEnd = T.bgmLoop[1];
+  let head = g;
+  if (BGM.shelf){ const f = c.createBiquadFilter(); f.type = 'highshelf'; f.frequency.value = T.bgmShelf[0]; f.gain.value = T.bgmShelf[1]; f.connect(g); head = f; }
+  s.connect(head); s.start();
+  BGM.want = -1; auBgmLevel(T.bgmFade);
+}
+function auBgmLevel(tau){
+  if (!BGM.gain) return;
+  const v = T.bgmGain * (AU.pourOn ? T.bgmDuck : 1) * (S.phase === 'judge' ? T.bgmJudge : 1);
+  if (v === BGM.want) return;
+  const down = v < BGM.want; BGM.want = v;
+  BGM.gain.gain.setTargetAtTime(v, AU.ctx.currentTime, tau ? tau / 3 : down ? 0.12 : 0.6);
+}
 const WATER_SR = 44100;
 const WATER = [
   { sec: 3.0, perSec: 90,  r: [0.0003, 0.0012],  seed: 11 },
@@ -1173,7 +1232,11 @@ function verdictOf(dev, tol){
   if (dev < 0) return { face: 'less', word: '少ない！', bad: true };
   return { face: 'more', word: '多すぎて悪いな…', bad: true };
 }
-const pct = v => { const r = Math.round(v * 1000) / 10; return (r > 0 ? '+' : r < 0 ? '−' : '±') + Math.abs(r).toFixed(1) + '%'; };
+const pct = (v, tol) => {
+  const a = Math.abs(v); let r = Math.round(a * 1000) / 10;
+  for (const b of [T.pourfect, tol * 0.5, tol]){ const e = Math.round(b * 1000) / 10; if (a > b && r <= e) r = Math.round(e * 10 + 1) / 10; }
+  return (r === 0 ? '±' : v > 0 ? '+' : '−') + r.toFixed(1) + '%';
+};
 const pm = v => '±' + Math.round(v * 1000) / 10 + '%';
 const HEART = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.4 4.5 6.9 4.5c2 0 3.6 1 5.1 2.9 1.5-1.9 3.1-2.9 5.1-2.9 3.5 0 5.5 3.4 4.2 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/></svg>';
 const livesHtml = (mark = -1, kind = '') => Array.from({ length: T.lives }, (_, i) => `<span class="lf${i < S.lives ? ' on' : ''}${i === mark ? ' ' + kind : ''}">${HEART}</span>`).join('');
@@ -1347,7 +1410,7 @@ function startJudge(){
   $('rBars').innerHTML = rows.map((r, i) => `<div class="bar" id="bar${i}">
       <div class="col"><div class="band" style="bottom:${lo}px;height:${hi - lo}px"></div>
       <div class="fill ${WINES[st.wine].fill}" style="height:0px"></div><div class="tgt" style="bottom:${barY(st.target)}px"></div></div>
-      ${FACES[r.v.face]}<span class="dv">${r.G.overflow ? 'あふれ' : r.skipped ? '—' : pct(r.dev)}</span></div>`).join('');
+      ${FACES[r.v.face]}<span class="dv">${r.G.overflow ? 'あふれ' : r.skipped ? '—' : pct(r.dev, st.tol)}</span></div>`).join('');
   rows.forEach((r, i) => { const el = $('bar' + i); r.el = { bar: el, col: el.firstElementChild, fill: el.querySelector('.fill'), lab: $('lab' + i) }; r.lo = lo; r.hi = hi; });
   $('rLegend').innerHTML = `<span><i class="lg-t"></i>ひとり分</span><span><i class="lg-b"></i>許容 ±${Math.round(st.tol * 100)}%</span>`;
   const el = $('app');
@@ -1389,7 +1452,7 @@ function showResult(){
   const bad = R.rows.filter(r => Math.abs(r.dev) > st.tol).length;
   const why = R.overflow ? `${R.ovIdx + 1} 杯目のグラスです。` : `${bad}名様が許容 ±${Math.round(st.tol * 100)}% の外でした。`;
   $('rSub').textContent = !R.pass ? why + (over ? 'ゲームオーバー' : 'ライフが 1 つ減りました')
-    : R.perfect ? `全員がひとり分の ${pm(T.pourfect)} 以内でした` + (kind === 'gain' ? '。ライフが 1 つ戻りました' : '') : `いちばん離れたお客様でも ${pct(R.worst)}`;
+    : R.perfect ? `全員がひとり分の ${pm(T.pourfect)} 以内でした` + (kind === 'gain' ? '。ライフが 1 つ戻りました' : '') : `いちばん離れたお客様でも ${pct(R.worst, st.tol)}`;
   $('rLine').hidden = !(over || mark >= 0);
   $('rLeft').innerHTML = over ? `ご満足いただけたのは <b>${cleared}</b> 組` : `ライフ <span class="lives" role="img" aria-label="ライフ ${S.lives}">${livesHtml(mark, kind)}</span>`;
   $('rRight').innerHTML = !over ? '' : S.official && cleared > S.best0 ? '<i class="newrec">新記録</i>' : SAVE.bestStage > 0 ? `ベスト <b>${SAVE.bestStage}</b> 組` : '';
@@ -1567,6 +1630,7 @@ function frame(now){
 function tick(dt){
   S.clock += dt;
   update(dt);
+  auBgmLevel();
   acc += dt; let steps = 0;
   while (acc >= T.simDt && steps < 16){ simStep(T.simDt); acc -= T.simDt; steps++; }
   if (steps >= 16) acc = 0;
@@ -1708,7 +1772,7 @@ function toTitle(){
   $('tBest').textContent = SAVE.bestStage ? `ベスト ${SAVE.bestStage} 組` : '';
   if (WEB) WEB.onTitle();
 }
-if (DEBUG || /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) window.__ps = { S, B, T, BOT, AU, TYPES, glassType, chains, drops, foam, idlePose, uprightReach, bakeEnv, endPointer, grab, release, setDrag: y => { S.dragY = y; }, loadStage: (no, custom) => { S.official = false; loadStage(no, custom); }, startRun, makeStage, FLOW, auBuild, auPour, WATER, keepInside, beginPouring,
+if (DEBUG || /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) window.__ps = { S, B, T, BOT, AU, TYPES, glassType, chains, drops, foam, idlePose, uprightReach, bakeEnv, endPointer, grab, release, setDrag: y => { S.dragY = y; }, loadStage: (no, custom) => { S.official = false; loadStage(no, custom); }, startRun, makeStage, FLOW, auBuild, auPour, WATER, BGM, auBgmLevel, auBgmDecode, auBgmLinear, keepInside, beginPouring,
   judgeWith(vols){ S.official = false; $('intro').hidden = true; S.glasses.forEach((G, i) => { G.vol = vols[i]; G.dirty = true; G.overflow = false; }); B.V = 0; S.cur = S.glasses.length - 1; toPhase('settle'); }, inspectStart, inspectMove, inspectEnd, renderer, cam, scene, CAM, bClip, sceneRT, backRT, THREE,
   gallery, advance(sec, fps = 60){ for (let t = 0; t < sec; t += 1 / fps) tick(1 / fps); lastSig = frameSig(); render(); return S.phase; },
   idle(){ tick(1 / 60); return !(busy() || frameSig() !== lastSig); } };
