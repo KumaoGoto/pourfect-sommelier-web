@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Pourfect Sommelier</title>
+<meta name="description" content="ボトルのワインを、人数分ぴったりに注ぎ分けるゲーム。ボトルの中の量を目で見て、2〜7 名様のグラスに等しく注ぎます。ブラウザでそのまま遊べて、何組にご満足いただけたかでランキングを競えます。">
+<link rel="canonical" href="https://pourfect-sommelier.kumao.app/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Pourfect Sommelier">
+<meta property="og:locale" content="ja_JP">
+<meta property="og:url" content="https://pourfect-sommelier.kumao.app/">
+<meta property="og:title" content="Pourfect Sommelier">
+<meta property="og:description" content="ボトルのワインを、人数分ぴったりに注ぎ分けよう。ブラウザでそのまま遊べます。">
+<meta property="og:image" content="https://pourfect-sommelier.kumao.app/assets/og/pourfect-og-1.jpg">
+<meta property="og:image:type" content="image/jpeg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Pourfect Sommelier　ワインボトルと、赤ワインを注いだグラス">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#110608">
+<meta name="color-scheme" content="dark">
+<meta name="format-detection" content="telephone=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Pourfect">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png">
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
+<link rel="preload" href="assets/fonts/shippori-500.woff" as="font" type="font/woff" crossorigin>
+<link rel="preload" href="assets/fonts/shippori-700.woff" as="font" type="font/woff" crossorigin>
+<link rel="preload" href="assets/fonts/cormorant.woff" as="font" type="font/woff" crossorigin>
+<link rel="stylesheet" href="v/58872f1c0f35/app.css">
+</head>
+<body>
+<div id="app">
+  <canvas id="cv"></canvas>
+  <div id="vig"></div>
+  <div id="glow"></div>
+  <div id="labels"></div>
+  <div id="hud" hidden>
+    <div class="hrow">
+      <div class="plaque"><span class="cap">STAGE</span><b id="hStage">1</b><span id="hGuests" class="sub">2名様</span></div>
+      <div class="right"><div id="hLives" class="plaque lives" role="img" aria-label="ライフ"></div></div>
+    </div>
+    <div id="hInfo" class="info"></div>
+    <div id="hDots" class="dots"></div>
+    <div class="spacer"></div>
+    <div id="hHint" class="hint"></div>
+  </div>
+  <button id="btnSound" class="iconbtn" aria-label="音を切りかえる" aria-pressed="true">♪</button>
+
+  <section id="title" class="screen">
+    <div class="tt">
+      <p class="eyebrow">the art of the equal pour</p>
+      <h1>Pourfect <i>Sommelier</i></h1>
+      <p class="lead">ボトルのワインを、人数分ぴったりに注ぎ分けよう。</p>
+      <ol class="how">
+        <li><b>下へなぞる</b>と注ぐ</li>
+        <li><b>指を離す</b>と次のグラスへ</li>
+        <li>最後の 1 杯には<b>残りがぜんぶ</b>入る</li>
+        <li>外すと<b>ライフ</b>が 1 つ減る。全員ぴったりで 1 つ戻る</li>
+      </ol>
+      <button id="btnStart" class="btn">はじめる</button>
+      <p id="tBest" class="best"></p>
+    </div>
+  </section>
+
+  <section id="intro" class="card" hidden>
+    <h2 id="iGuests">2名様のご来店</h2>
+    <p id="iHint" class="note"></p>
+    <button id="btnGo" class="btn">注ぎはじめる</button>
+  </section>
+
+  <section id="result" class="card" hidden>
+    <p class="cap" id="rStage"></p>
+    <h2 id="rTitle"></h2>
+    <div class="fold"><div><p id="rSub" class="sub"></p></div></div>
+    <div id="rBars" class="bars"></div>
+    <div id="rLegend" class="legend"></div>
+    <div class="fold"><div>
+      <div id="rLine" class="scoreline"><span id="rLeft"></span><span id="rRight"></span></div>
+      <div class="btns">
+        <button id="btnNext" class="btn">次のお客様へ</button>
+        <button id="btnRetry" class="btn" hidden>STAGE 1 からもう一度</button>
+        <button id="btnTitle" class="btn ghost" hidden>タイトルへ</button>
+      </div>
+    </div></div>
+  </section>
+  <pre id="dbg" hidden></pre>
+</div>
+<script>
+window.__psLoadTimer = setTimeout(function(){ if (window.__ps || document.getElementById('err')) return; var d = document.createElement('pre'); d.id = 'loadErr'; d.textContent = '3D の部品（three.js）の読み込みに時間がかかっています。しばらく待っても始まらないときは、通信を確かめてページを開き直してください。'; document.getElementById('app').appendChild(d); }, 12000);
+</script>
+<script src="v/58872f1c0f35/js/web.js"></script>
+<script type="module" src="v/58872f1c0f35/js/app.js"></script>
+</body>
+</html>
