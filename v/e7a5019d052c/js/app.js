@@ -2,9 +2,15 @@ import * as THREE from './three.module.js';
 const $ = id => document.getElementById(id);
 const QS = new URLSearchParams(location.search);
 const DEBUG = QS.has('debug');
+const DEV = DEBUG || /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
 const WEB = (typeof window !== 'undefined' && window.PS_WEB) || null;
 Error.stackTraceLimit = 30;
-window.addEventListener('error', e => { const d = $('err') || Object.assign(document.createElement('pre'), {id:'err'}); d.textContent = String(e.message || e.error) + (DEBUG && e.error ? '\n' + e.error.stack : ''); $('app').appendChild(d); });
+window.addEventListener('error', e => {
+  const d = $('err') || Object.assign(document.createElement('pre'), {id:'err'});
+  if (DEV) d.textContent = String(e.message || e.error) + (DEBUG && e.error ? '\n' + e.error.stack : '');
+  else { d.className = 'soft'; d.textContent = 'うまく動かないところがありました。\n続けて遊べないときは、開き直してください。\n（押すと消えます）'; d.onclick = () => d.remove(); }
+  $('app').appendChild(d);
+});
 let lastSig = '';
 const START_STAGE = Math.max(1, parseInt(QS.get('stage') || '1', 10) || 1);
 const TAU = Math.PI * 2, DEG = Math.PI / 180;
@@ -670,12 +676,17 @@ const foamMat = new THREE.ShaderMaterial({
     }`,
   transparent: true, depthWrite: false });
 const foamPts = new THREE.Points(fGeo, foamMat); foamPts.layers.set(L_FX); foamPts.frustumCulled = false; foamPts.renderOrder = -1; scene.add(foamPts);
-const AU = { ctx: null, out: null, on: true, pour: null, last: {}, ran: false, pourOn: false, pourT: 0, tokPh: 0.6, tokJit: 1, tokOn: false };
+const AU = { ctx: null, out: null, on: true, pour: null, last: {}, ran: false, pourOn: false, pourT: 0, tokPh: 0.6, tokJit: 1, tokOn: false, held: false };
 function auResume(){
-  const c = AU.ctx; if (!c || c.state === 'running' || c.state === 'closed' || document.hidden) return;
+  const c = AU.ctx; if (!c || AU.held || c.state === 'running' || c.state === 'closed' || document.hidden) return;
   try { const p = c.resume(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
 }
 const auLive = () => !!AU.ctx && !!AU.pour && (AU.ctx.state === 'running' || !AU.ran);
+function auHold(on){
+  AU.held = !!on; const c = AU.ctx; if (!c) return;
+  if (on){ if (c.state === 'running') try { const p = c.suspend(); if (p && p.catch) p.catch(() => {}); } catch (e) {} }
+  else auResume();
+}
 function auInit(){
   if (AU.ctx){ auResume(); return; }
   const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
@@ -797,7 +808,7 @@ function auPour(p, dt, now){
   if (AU.on && p.out > T.tokMin){
     if (p.sub <= 0.35){
       AU.tokPh += dt * lerp(T.tokHz[0], T.tokHz[1], smooth(4, 55, p.out)) * AU.tokJit;
-      if (AU.tokPh >= 1){ AU.tokPh = 0; AU.tokJit = 0.86 + Math.random() * 0.28; auTok(t, tokPitch(p.air), 0.55 + 0.45 * smooth(4, 45, p.out)); }
+      if (AU.tokPh >= 1){ AU.tokPh = 0; AU.tokJit = 0.86 + Math.random() * 0.28; const amp = 0.55 + 0.45 * smooth(4, 45, p.out); auTok(t, tokPitch(p.air), amp); haptic('tok', amp); }
     }
   } else {
     AU.tokPh = 0.6;
@@ -830,6 +841,7 @@ function bell(f, t, peak, dec){ for (const [m, a, dd] of [[1, 1, 1], [2.76, 0.32
 function sfx(name, p = 0){
   if (!auLive() || !AU.on) return; const c = AU.ctx, t = c.currentTime;
   const now = performance.now(); if (AU.last[name] && now - AU.last[name] < 25) return; AU.last[name] = now;
+  haptic(name, p);
   switch (name){
     case 'glug': auTok(t, tokPitch((BOT.total - B.V) * 1e6), 1.25); break;
     case 'drip': osc('sine', 650 + Math.random() * 200, 1500, t, 0.003, 0.10, 0.06); break;
@@ -855,6 +867,7 @@ function sfx(name, p = 0){
   }
 }
 const vibrate = ms => { try { if (AU.on && navigator.vibrate && (!navigator.userActivation || navigator.userActivation.hasBeenActive)) navigator.vibrate(ms); } catch (e) {} };
+function haptic(name, p){ try { if (WEB && WEB.haptic) WEB.haptic(name, p); } catch (e) {} }
 const SAVE_KEY = 'pourfect-sommelier.v1';
 function loadSave(){ try { return JSON.parse(localStorage.getItem(SAVE_KEY)) || {}; } catch (e) { return {}; } }
 function writeSave(o){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(o)); } catch (e) {} }
@@ -917,6 +930,7 @@ function loadStage(no, custom){
   S.phase = 'intro'; S.t = 0;
   showIntro();
   updateHud();
+  phaseChanged();
 }
 const curG = () => S.glasses[S.cur];
 const isLastGlass = () => S.cur === S.glasses.length - 1;
@@ -1188,11 +1202,25 @@ const frameFinale = () => () => {
   const w = G.x - P.x + P.ty.outerR + G.ty.outerR + 0.05, h = Math.max(0.44, Math.max(G.ty.rimY, P.ty.rimY) + 0.20);
   return { tx: lerp(base.tx, (G.x + G.ty.outerR + 0.03 + P.x - P.ty.outerR - 0.02) / 2, k), ty: lerp(base.ty, 0.16, k), tz: 0, dist: lerp(base.dist, fitDist(w, h), k), pitch: base.pitch, yaw: lerp(base.yaw, -2 * DEG, k) };
 };
+const LAB = { h: 50, hCompact: 28, stagger: 34, gap: 5, half: 55 };
+let labCompact = false;
+let hudKey = '', hudY = 0;
+function hudRowBottom(){
+  const el = $('app'), k = el.clientWidth + 'x' + el.clientHeight;
+  if (k !== hudKey && !$('hud').hidden){ hudKey = k; hudY = $('hud').firstElementChild.getBoundingClientRect().bottom - el.getBoundingClientRect().top; }
+  return hudY;
+}
 const frameOverview = (judge = false) => () => {
   const gs = S.glasses; if (!gs.length) return CAM.cur;
   const span = gs[gs.length - 1].x - gs[0].x + gs[0].ty.outerR + gs[gs.length - 1].ty.outerR;
-  const tv = Math.tan(cam.fov * DEG / 2), V = Math.max(0.30 / 0.44, (span + 0.14) / cam.aspect);
-  return { tx: (gs[0].x + gs[gs.length - 1].x) / 2, ty: 0.12 - (judge ? 0.19 : 0.22) * V, tz: 0, dist: V / (2 * tv), pitch: 15 * DEG, yaw: 0 };
+  const tv = Math.tan(cam.fov * DEG / 2), V = Math.max(0.30 / 0.44, (span + 0.14) / cam.aspect), pitch = 15 * DEG;
+  let ty = 0.12 - (judge ? 0.19 : 0.22) * V;
+  if (judge){
+    const H = $('app').clientHeight, n = 1 - 2 * (hudRowBottom() + LAB.gap + (labCompact ? LAB.hCompact + LAB.stagger : LAB.h)) / H;
+    const y = Math.max(...gs.map(G => G.ty.rimY)) + 0.012;
+    if (n > 0) ty = Math.max(ty, y - n * V / (2 * Math.cos(pitch) + 2 * n * tv * Math.sin(pitch)));
+  }
+  return { tx: (gs[0].x + gs[gs.length - 1].x) / 2, ty, tz: 0, dist: V / (2 * tv), pitch, yaw: 0 };
 };
 const inspectCenter = () => { const p = idlePose(S.glasses[0]); return { x: p.x, y: T.inspectY, z: p.z }; };
 const frameBottle = () => () => {
@@ -1243,7 +1271,7 @@ const livesHtml = (mark = -1, kind = '') => Array.from({ length: T.lives }, (_, 
 function showIntro(){
   const st = S.stage;
   $('iGuests').textContent = `${st.n}名様のご来店`;
-  $('iHint').innerHTML = 'ボトルは指で回して、中の量を見られます' + (st.no <= T.guideStages ? `<br><b>水色の点線</b>は ${st.n} 等分の目安です。注ぎはじめると消えます。` : '');
+  $('iHint').innerHTML = 'ボトルは指で回して、中の量を見られます' + (st.no <= T.guideStages ? `<br><span class="nb"><b>水色の点線</b>は ${st.n} 等分の目安です。</span><span class="nb">注ぎはじめると消えます。</span>` : '');
   $('intro').hidden = false; $('hud').hidden = false; $('title').hidden = true; $('result').hidden = true;
 }
 function updateHud(){
@@ -1255,7 +1283,15 @@ function updateHud(){
   $('hDots').innerHTML = S.glasses.map((G, i) => `<span class="dot${i < S.cur || (i === S.cur && ['lift','settle','judge','result'].includes(S.phase)) ? ' done' : ''}${i === S.cur && !['judge','result','intro'].includes(S.phase) ? ' cur' : ''}${i === S.glasses.length - 1 ? ' auto' : ''}" title="${i + 1}杯目"></span>`).join('');
 }
 function setHint(html){ const h = $('hHint'); if (h.dataset.v !== html){ h.dataset.v = html; h.innerHTML = html; } }
-function toPhase(p){ S.phase = p; S.t = 0; updateHud(); }
+function toPhase(p){ S.phase = p; S.t = 0; updateHud(); phaseChanged(); }
+function phaseChanged(){ if (WEB && WEB.onPhase) try { WEB.onPhase(S.phase); } catch (e) { console.error('web', e); } }
+const canQuit = () => !!S.stage && (S.phase === 'intro' || S.phase === 'aim' || (S.phase === 'result' && S.lives > 0));
+function quitRun(){
+  if (!canQuit()) return false;
+  endPointer(); S.holding = false; clearTimeout(showResult.tm);
+  toTitle();
+  return true;
+}
 const _qy = new THREE.Quaternion(), _ax = new THREE.Vector3(), _cr = new THREE.Vector3(), _ct = new THREE.Vector3(), _Y = new THREE.Vector3(0, 1, 0);
 function inspectStart(x, y){ if (S.phase !== 'intro') return; auInit(); S.insp = { x0: x, y0: y }; }
 function inspectMove(x, y){
@@ -1340,7 +1376,7 @@ function update(dt){
       if (B.Q > 0){ toLift(); break; }
       returnPose(G);
       B.myT = idlePose(G).y + Math.sin(S.clock * 1.7) * 0.002;
-      setHint(T.pourMarks && S.cur > 0 && S.stageNo <= 2 ? 'ボトルの<b>線の間隔</b>をそろえると同じ量' : '画面を押したまま<b>下へなぞる</b>とボトルが傾きます'); break;
+      setHint(T.pourMarks && S.cur > 0 && S.stageNo <= 2 ? 'ボトルの<b>線の間隔</b>をそろえると同じ量' : '<span class="nb">画面を押したまま</span><span class="nb"><b>下へなぞる</b>と</span><span class="nb">ボトルが傾きます</span>'); break;
     case 'pour': {
       const H = $('app').clientHeight || 800;
       setTiltWant(clamp(S.ready + (S.dragY - S.dragY0) / H * T.tiltPerScreen, S.ready - T.tiltBelow, T.tiltMax));
@@ -1451,8 +1487,9 @@ function showResult(){
   $('rTitle').textContent = R.overflow ? 'グラスからあふれました' : R.perfect ? 'POURFECT！ 全員ぴったり' : R.pass ? '全員ご満足いただけました' : 'ご不満のお客様が…';
   const bad = R.rows.filter(r => Math.abs(r.dev) > st.tol).length;
   const why = R.overflow ? `${R.ovIdx + 1} 杯目のグラスです。` : `${bad}名様が許容 ±${Math.round(st.tol * 100)}% の外でした。`;
-  $('rSub').textContent = !R.pass ? why + (over ? 'ゲームオーバー' : 'ライフが 1 つ減りました')
-    : R.perfect ? `全員がひとり分の ${pm(T.pourfect)} 以内でした` + (kind === 'gain' ? '。ライフが 1 つ戻りました' : '') : `いちばん離れたお客様でも ${pct(R.worst, st.tol)}`;
+  const nb = t => `<span class="nb">${t}</span>`;
+  $('rSub').innerHTML = !R.pass ? nb(why) + nb(over ? 'ゲームオーバー' : 'ライフが 1 つ減りました')
+    : R.perfect ? (kind === 'gain' ? nb(`全員がひとり分の ${pm(T.pourfect)} 以内でした。`) + nb('ライフが 1 つ戻りました') : nb(`全員がひとり分の ${pm(T.pourfect)} 以内でした`)) : nb(`いちばん離れたお客様でも ${pct(R.worst, st.tol)}`);
   $('rLine').hidden = !(over || mark >= 0);
   $('rLeft').innerHTML = over ? `ご満足いただけたのは <b>${cleared}</b> 組` : `ライフ <span class="lives" role="img" aria-label="ライフ ${S.lives}">${livesHtml(mark, kind)}</span>`;
   $('rRight').innerHTML = !over ? '' : S.official && cleared > S.best0 ? '<i class="newrec">新記録</i>' : SAVE.bestStage > 0 ? `ベスト <b>${SAVE.bestStage}</b> 組` : '';
@@ -1663,7 +1700,7 @@ function tick(dt){
   bClip.value = Number.isFinite(lv) && B.V > 0 ? n.dot(_mw) + lv : -10;
   if (B.stopper < 1 && B.stopper > 0) B.stopper = Math.max(0, B.stopper - dt / 0.35);
   if (S.phase === 'title') B.stopper = 1;
-  stopper.visible = B.stopper > 0; stopper.position.y = BOT.L + (1 - B.stopper) * 0.05;
+  stopper.visible = B.stopper > 0; stopper.position.y = BOT.L + easeOut(1 - B.stopper) * 0.05;
   bWineF.visible = bWineB.visible = B.V > 0.15e-6;
   spring(B.spin, (S.phase === 'title' ? 0 : Math.PI) - rigYaw, 5, dt); spring(B.spinOff, B.spinOffT, 9, dt); bottle.rotation.y = B.spin.x + B.spinOff.x;
   const bsx = B.mx.x + Math.sin(B.th.x) * BOT.L * 0.5, bx = S.rigX + bsx * yawC + B.mz.x * yawS, bz = -bsx * yawS + B.mz.x * yawC;
@@ -1691,15 +1728,20 @@ function tick(dt){
 let labKey = '';
 function placeLabels(){
   const el = $('app'), W = el.clientWidth, H = el.clientHeight;
-  const key = [cam.position.x, cam.position.y, cam.position.z, cam.quaternion.x, cam.quaternion.y, cam.aspect].map(v => v.toFixed(5)).join() + W + 'x' + H + (S.toast && !S.toast.done ? S.toast.t.toFixed(3) : '');
+  const card = $('result'), lo = hudRowBottom() + LAB.gap, hi = (card.hidden ? H : card.offsetTop) - LAB.gap;
+  const key = [cam.position.x, cam.position.y, cam.position.z, cam.quaternion.x, cam.quaternion.y, cam.aspect].map(v => v.toFixed(5)).join() + W + 'x' + H + (S.toast && !S.toast.done ? S.toast.t.toFixed(3) : '') + '|' + lo.toFixed(1) + '|' + hi.toFixed(1);
   if (key === labKey) return;
   labKey = key;
   const x0 = S.glasses.map(G => (_p.set(G.x, G.ty.rimY + 0.012, 0).project(cam).x + 1) / 2 * W);
   const xs = S.glasses.map(G => { _p.set(G.grp.position.x, G.ty.rimY + 0.012 + G.grp.position.y, 0).project(cam); return [(_p.x + 1) / 2 * W, (1 - _p.y) / 2 * H]; });
   let gap = 1e9; for (let i = 1; i < x0.length; i++) gap = Math.min(gap, x0[i] - x0[i-1]);
-  const compact = gap < 74; $('labels').classList.toggle('compact', compact);
+  const compact = labCompact = gap < 74; $('labels').classList.toggle('compact', compact);
   const top = Math.min(...xs.map(p => p[1]));
-  xs.forEach(([x, y], i) => { const lab = $('lab' + i); if (!lab) return; lab.style.left = x + 'px'; lab.style.top = (compact ? top - (i % 2) * 34 : y) + 'px'; });
+  const need = compact ? LAB.hCompact + LAB.stagger : LAB.h;
+  const cl = card.hidden ? 0 : card.offsetLeft - card.offsetWidth / 2 - LAB.half, cr = card.hidden ? 0 : card.offsetLeft + card.offsetWidth / 2 + LAB.half;
+  const fit = (y, x) => clamp(y, lo + need, x === undefined || (x > cl && x < cr) ? hi : H);
+  $('labels').classList.toggle('off', hi - lo < need);
+  xs.forEach(([x, y], i) => { const lab = $('lab' + i); if (!lab) return; lab.style.left = x + 'px'; lab.style.top = (compact ? fit(top) - (i % 2) * LAB.stagger : fit(y, x)) + 'px'; });
 }
 function debugOut(){
   const d = $('dbg'); if (!d) return; d.hidden = false;
@@ -1756,6 +1798,7 @@ function gallery(ids, fill = 0.32, wine = 'red'){
   camGo(frameOverview(), 0.6);
 }
 function startRun(){
+  if (WEB && WEB.onRunStart) try { WEB.onRunStart(); } catch (e) { console.error('web', e); }
   S.official = START_STAGE === 1 && !DEBUG;
   S.best0 = SAVE.bestStage; S.run = []; S.lives = T.lives; S.served = 0;
   S.rng = mulberry32((Math.random() * 2 ** 31) | 0);
@@ -1770,15 +1813,16 @@ function toTitle(){
   camGo(frameTitle(), 1.0);
   $('hud').hidden = true; $('intro').hidden = true; $('result').hidden = true; $('title').hidden = false;
   $('tBest').textContent = SAVE.bestStage ? `ベスト ${SAVE.bestStage} 組` : '';
+  phaseChanged();
   if (WEB) WEB.onTitle();
 }
-if (DEBUG || /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) window.__ps = { S, B, T, BOT, AU, TYPES, glassType, chains, drops, foam, idlePose, uprightReach, bakeEnv, endPointer, grab, release, setDrag: y => { S.dragY = y; }, loadStage: (no, custom) => { S.official = false; loadStage(no, custom); }, startRun, makeStage, FLOW, auBuild, auPour, WATER, BGM, auBgmLevel, auBgmDecode, auBgmLinear, keepInside, beginPouring,
+if (DEV) window.__ps = { S, B, T, BOT, AU, TYPES, glassType, chains, drops, foam, idlePose, uprightReach, bakeEnv, endPointer, grab, release, setDrag: y => { S.dragY = y; }, loadStage: (no, custom) => { S.official = false; loadStage(no, custom); }, startRun, makeStage, FLOW, auBuild, auPour, WATER, BGM, auBgmLevel, auBgmDecode, auBgmLinear, keepInside, beginPouring,
   judgeWith(vols){ S.official = false; $('intro').hidden = true; S.glasses.forEach((G, i) => { G.vol = vols[i]; G.dirty = true; G.overflow = false; }); B.V = 0; S.cur = S.glasses.length - 1; toPhase('settle'); }, inspectStart, inspectMove, inspectEnd, renderer, cam, scene, CAM, bClip, sceneRT, backRT, THREE,
   gallery, advance(sec, fps = 60){ for (let t = 0; t < sec; t += 1 / fps) tick(1 / fps); lastSig = frameSig(); render(); return S.phase; },
   idle(){ tick(1 / 60); return !(busy() || frameSig() !== lastSig); } };
 resize();
 toTitle();
-try { if (WEB) WEB.attach({ phase: () => S.phase, sfx, auInit }); } catch (e) { console.error('web', e); }
+try { if (WEB) WEB.attach({ phase: () => S.phase, sfx, auInit, hold: auHold, soundOn: () => AU.on, canQuit, quit: quitRun }); } catch (e) { console.error('web', e); }
 if (QS.has('gallery')) gallery(QS.get('gallery') === 'weird' ? WEIRD : CLASSIC, parseFloat(QS.get('fill') || '0.32'), QS.get('wine') || 'red');
 CAM.t = 1;
 requestAnimationFrame(t => { lastT = t; frame(t); });
