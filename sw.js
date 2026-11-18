@@ -1,7 +1,7 @@
-const VERSION = '8fcd9d925b94';
+const VERSION = 'b8e9e1e84fb6';
 const PRECACHE = [
   './',
-  'v/8fcd9d925b94/app.css',
+  'v/b8e9e1e84fb6/app.css',
   'assets/fonts/cormorant-italic.woff',
   'assets/fonts/cormorant.woff',
   'assets/fonts/shippori-500.woff',
@@ -15,9 +15,9 @@ const PRECACHE = [
   'assets/licenses/OFL-ShipporiMincho.txt',
   'assets/licenses/three.js-LICENSE.txt',
   'index.html',
-  'v/8fcd9d925b94/js/app.js',
-  'v/8fcd9d925b94/js/three.module.js',
-  'v/8fcd9d925b94/js/web.js',
+  'v/b8e9e1e84fb6/js/app.js',
+  'v/b8e9e1e84fb6/js/three.module.js',
+  'v/b8e9e1e84fb6/js/web.js',
   'manifest.webmanifest',
   'privacy.html',
 ];
