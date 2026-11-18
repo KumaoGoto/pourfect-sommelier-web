@@ -930,6 +930,7 @@ function loadStage(no, custom){
   S.phase = 'intro'; S.t = 0;
   showIntro();
   updateHud();
+  phaseChanged();
 }
 const curG = () => S.glasses[S.cur];
 const isLastGlass = () => S.cur === S.glasses.length - 1;
@@ -1282,7 +1283,15 @@ function updateHud(){
   $('hDots').innerHTML = S.glasses.map((G, i) => `<span class="dot${i < S.cur || (i === S.cur && ['lift','settle','judge','result'].includes(S.phase)) ? ' done' : ''}${i === S.cur && !['judge','result','intro'].includes(S.phase) ? ' cur' : ''}${i === S.glasses.length - 1 ? ' auto' : ''}" title="${i + 1}杯目"></span>`).join('');
 }
 function setHint(html){ const h = $('hHint'); if (h.dataset.v !== html){ h.dataset.v = html; h.innerHTML = html; } }
-function toPhase(p){ S.phase = p; S.t = 0; updateHud(); }
+function toPhase(p){ S.phase = p; S.t = 0; updateHud(); phaseChanged(); }
+function phaseChanged(){ if (WEB && WEB.onPhase) try { WEB.onPhase(S.phase); } catch (e) { console.error('web', e); } }
+const canQuit = () => !!S.stage && (S.phase === 'intro' || S.phase === 'aim' || (S.phase === 'result' && S.lives > 0));
+function quitRun(){
+  if (!canQuit()) return false;
+  endPointer(); S.holding = false; clearTimeout(showResult.tm);
+  toTitle();
+  return true;
+}
 const _qy = new THREE.Quaternion(), _ax = new THREE.Vector3(), _cr = new THREE.Vector3(), _ct = new THREE.Vector3(), _Y = new THREE.Vector3(0, 1, 0);
 function inspectStart(x, y){ if (S.phase !== 'intro') return; auInit(); S.insp = { x0: x, y0: y }; }
 function inspectMove(x, y){
@@ -1804,6 +1813,7 @@ function toTitle(){
   camGo(frameTitle(), 1.0);
   $('hud').hidden = true; $('intro').hidden = true; $('result').hidden = true; $('title').hidden = false;
   $('tBest').textContent = SAVE.bestStage ? `ベスト ${SAVE.bestStage} 組` : '';
+  phaseChanged();
   if (WEB) WEB.onTitle();
 }
 if (DEV) window.__ps = { S, B, T, BOT, AU, TYPES, glassType, chains, drops, foam, idlePose, uprightReach, bakeEnv, endPointer, grab, release, setDrag: y => { S.dragY = y; }, loadStage: (no, custom) => { S.official = false; loadStage(no, custom); }, startRun, makeStage, FLOW, auBuild, auPour, WATER, BGM, auBgmLevel, auBgmDecode, auBgmLinear, keepInside, beginPouring,
@@ -1812,7 +1822,7 @@ if (DEV) window.__ps = { S, B, T, BOT, AU, TYPES, glassType, chains, drops, foam
   idle(){ tick(1 / 60); return !(busy() || frameSig() !== lastSig); } };
 resize();
 toTitle();
-try { if (WEB) WEB.attach({ phase: () => S.phase, sfx, auInit, hold: auHold, soundOn: () => AU.on }); } catch (e) { console.error('web', e); }
+try { if (WEB) WEB.attach({ phase: () => S.phase, sfx, auInit, hold: auHold, soundOn: () => AU.on, canQuit, quit: quitRun }); } catch (e) { console.error('web', e); }
 if (QS.has('gallery')) gallery(QS.get('gallery') === 'weird' ? WEIRD : CLASSIC, parseFloat(QS.get('fill') || '0.32'), QS.get('wine') || 'red');
 CAM.t = 1;
 requestAnimationFrame(t => { lastT = t; frame(t); });
