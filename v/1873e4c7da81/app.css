@@ -200,8 +200,12 @@ h1 i{font-weight:500;color:var(--brass);display:block;padding-left:.9em}
 .rk-tab.on{border-color:var(--brass);color:var(--cream);background:rgba(217,182,108,.16)}
 .rk-who{display:flex;align-items:baseline;gap:6px;min-width:0}
 .rk-who .rk-name{min-width:0}
-.rk-badges{flex:none;font-size:12px;color:var(--brass);white-space:nowrap}
+.rk-badges{flex:none;display:inline-flex;align-items:baseline;gap:6px;font-size:15px;line-height:1;white-space:nowrap}
+.rk-mine .rk-badges{margin-left:8px}
+.rk-bd{display:inline-flex;align-items:baseline}
+.rk-bn{margin-left:1px;font-size:10px;color:var(--brass);letter-spacing:0;font-variant-numeric:lining-nums tabular-nums}
 .rk-badgenote{margin-top:6px;opacity:.85}
+.rk-period{margin:0;font-size:14px;color:var(--cream);letter-spacing:.04em;font-variant-numeric:lining-nums tabular-nums}
 .rk-codebox{display:grid;gap:6px;padding:10px 12px;border:1px solid var(--line);border-radius:3px;background:rgba(0,0,0,.18)}
 .rk-codebox b{color:var(--cream);font-size:14px}
 .rk-codearea{display:grid;gap:6px}

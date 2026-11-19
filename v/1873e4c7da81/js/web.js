@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 const NATIVE=window.PS_NATIVE||null;
-const WEB_VERSION='1.3.0';
+const WEB_VERSION='1.3.3';
 const SITE_URL='https://pourfect-sommelier.kumao.app/';
 const APP_URL='https://apps.apple.com/jp/app/id6834156070?pt=129314143&ct=web&mt=8';
 const IOS_DEVICE=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
@@ -32,7 +32,7 @@ const drop=k=>{ try{ localStorage.removeItem(k); }catch(e){} };
 const $=id=>document.getElementById(id);
 function el(tag,cls,text){ const e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=text; return e; }
 const tap=()=>{ try{ if(g){ g.auInit(); g.sfx('tap'); } }catch(e){} };
-class HttpError extends Error{ constructor(status,code){ super(code||`HTTP ${status}`); this.status=status; this.code=code; } }
+class HttpError extends Error{ constructor(status,code,reason){ super(code||`HTTP ${status}`); this.status=status; this.code=code; this.reason=reason; } }
 function graphemes(t){ return typeof Intl!=='undefined'&&Intl.Segmenter?Array.from(new Intl.Segmenter('ja',{granularity:'grapheme'}).segment(t),x=>x.segment):Array.from(t); }
 function cleanText(s){
   return String(s||'').replace(/[\u0000-\u001f\u007f-\u009f​‎‏‪-‮⁠-⁩﻿]/g,'').trim();
@@ -55,14 +55,14 @@ const Rank={
       let r=null; try{ r=await NATIVE.fetch(method,API+path,body?JSON.stringify(body):null,TIMEOUT_MS); }catch(e){}
       if(!r||!r.status) throw new HttpError(0,'offline');
       let j={}; try{ j=JSON.parse(r.body); }catch(e){}
-      if(r.status<200||r.status>=300) throw new HttpError(r.status,j.error);
+      if(r.status<200||r.status>=300) throw new HttpError(r.status,j.error,j.reason);
       return j;
     }
     const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),TIMEOUT_MS);
     try{
       const res=await fetch(API+path,{method,headers:body?{'content-type':'application/json'}:{},body:body?JSON.stringify(body):undefined,signal:ctl.signal,cache:'no-store'});
       let j={}; try{ j=await res.json(); }catch(e){}
-      if(!res.ok) throw new HttpError(res.status,j.error);
+      if(!res.ok) throw new HttpError(res.status,j.error,j.reason);
       return j;
     }catch(e){
       if(e instanceof HttpError) throw e;
@@ -106,6 +106,7 @@ const Rank={
       this.push().then(r2=>{ if(resultOpen()) reportRank(r2); }).catch(()=>{});
       return null;
     }catch(e){
+      if(e.code==='ng name'&&e.reason==='taken') return this.joined?['その名前は、','ほかの人が使っています']:['その名前は、ほかの人が使っています。','別の端末の自分の名前なら、','一覧の下の「引き継ぎコードで戻す」から'];
       if(e.code==='ng name'||e.code==='bad name') return 'その名前は使えません';
       if(e.status===429) return '少し時間をおいて試してください';
       return 'つながりませんでした';
@@ -216,6 +217,16 @@ const TABS=[['today','今日'],['week','今週'],['all','全期間']];
 let rankTab='today';
 const boardCache=new Map(), BOARD_TTL=20000;
 function badgeText(b){ const t=[]; if(b&&b.day) t.push(`🍷×${b.day}`); if(b&&b.week) t.push(`🏆×${b.week}`); return t.join(' '); }
+function badgeEl(b){
+  const box=el('span','rk-badges');
+  for(const [mark,n] of [['🍷',b&&b.day],['🏆',b&&b.week]]){
+    if(!(n>0)) continue;
+    const one=el('span','rk-bd',mark); one.setAttribute('role','img'); one.setAttribute('aria-label',`${mark}×${n}`);
+    if(n>1) one.append(el('span','rk-bn',`×${n}`));
+    box.append(one);
+  }
+  return box.childNodes.length?box:null;
+}
 function renderTabs(show){
   const box=$('rkTabs'); if(!box) return;
   box.hidden=!show; box.innerHTML='';
@@ -258,6 +269,7 @@ async function renderBoard(body,my){
     if(my!==rankSeq) return;
     body.innerHTML='';
     if(tab!=='all'&&r.board!==tab){ body.append(el('p','rk-empty','今日・今週のランキングは、もうすぐ始まります')); return; }
+    if(tab==='week'&&r.from&&r.to){ const pd=el('p','rk-period'); pd.append(el('span','nb',`${mdw(r.from)}〜`),el('span','nb',mdw(r.to))); body.append(pd); }
     const head=el('div','rk-head');
     head.append(el('span',null,`${tab==='today'?'今日の参加':tab==='week'?'今週の参加':'参加'} ${r.total} 人`));
     if(Rank.joined){ const me=el('button','rk-link'); me.append(nameFont(el('span',null,Rank.state.name),Rank.state.name),document.createTextNode('（名前を変える）')); me.onclick=()=>{ tap(); openRank('rename'); }; head.append(me); }
@@ -271,7 +283,7 @@ async function renderBoard(body,my){
         const li=el('li','rk-row'+(e.mine?' mine':''));
         const score=el('span','rk-score'); score.append(el('b',null,String(e.cleared)),document.createTextNode(' 組'));
         const who=el('span','rk-who'); who.append(nameFont(el('span','rk-name',e.name),e.name));
-        const bt=badgeText(e.badges); if(bt) who.append(el('span','rk-badges',bt));
+        const be=badgeEl(e.badges); if(be) who.append(be);
         li.append(el('span','rk-rank',String(e.rank)),who,score);
         if(!e.mine&&Rank.joined){
           li.classList.add('tap'); li.tabIndex=0; li.setAttribute('aria-expanded','false');
@@ -283,7 +295,11 @@ async function renderBoard(body,my){
       body.append(list);
       if(Rank.joined) body.append(el('p','rk-small','名前を押すと、通報・表示しないができます'));
     }
-    if(Rank.joined&&!top.some(e=>e.mine)) body.append(el('p','rk-mine',r.myRank&&r.mine?`あなたは ${r.myRank} 位（${r.mine.cleared} 組）${badgeText(r.mine.badges)?' '+badgeText(r.mine.badges):''}`:tab==='all'?'あなたの記録はまだありません。1 組でもご満足いただけると載ります':tab==='today'?'今日の記録はまだありません':'今週の記録はまだありません'));
+    if(Rank.joined&&!top.some(e=>e.mine)){
+      const mp=el('p','rk-mine',r.myRank&&r.mine?`あなたは ${r.myRank} 位（${r.mine.cleared} 組）`:tab==='all'?'あなたの記録はまだありません。1 組でもご満足いただけると載ります':tab==='today'?'今日の記録はまだありません':'今週の記録はまだありません');
+      const be=r.myRank&&r.mine?badgeEl(r.mine.badges):null; if(be) mp.append(be);
+      body.append(mp);
+    }
     if(!Rank.joined){
       const rec=last||Rank.pending;
       if(rec){ if(!last) last=rec; const b=el('button','btn',`${rec.cleared} 組の記録を載せる`); b.onclick=()=>{ tap(); openRank('join'); }; body.append(b); }
@@ -368,7 +384,7 @@ function renderJoin(body,renaming){
     tap(); go.disabled=true; go.textContent='送っています…';
     const my=rankSeq, err=await Rank.join(input.value);
     if(my!==rankSeq) return;
-    if(err){ msg.textContent=err; go.disabled=false; go.textContent=label; return; }
+    if(err){ msg.replaceChildren(...[].concat(err).map(t=>el('span','nb',t))); go.disabled=false; go.textContent=label; return; }
     openRank();
   };
   box.append(msg,go);
