@@ -2,7 +2,8 @@ import * as THREE from './three.module.js';
 const $ = id => document.getElementById(id);
 const QS = new URLSearchParams(location.search);
 const DEBUG = QS.has('debug');
-const DEV = DEBUG || /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+const LOCAL = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+const DEV = DEBUG || LOCAL;
 const WEB = (typeof window !== 'undefined' && window.PS_WEB) || null;
 Error.stackTraceLimit = 30;
 window.addEventListener('error', e => {
@@ -136,9 +137,61 @@ const GL = {
     inner:[[0,0],[0.040,0.002],[0.062,0.008],[0.070,0.016],[0.073,0.024]] },
   wave:    { name:'なみなみ',     weird:true, stem:false, bowlY:0.010, wall:0.0018, baseR:0.030,
     inner:[[0,0],[0.022,0],[0.028,0.006],[0.031,0.030],[0.024,0.052],[0.035,0.078],[0.026,0.102],[0.036,0.126],[0.035,0.142]] },
+  steps:   { name:'だんだん',     weird:true, stem:false, bowlY:0.012, wall:0.0022, baseR:0.026,
+    inner:[[0,0],[0.015,0],[0.0175,0.002],[0.018,0.006],[0.018,0.034],[0.0185,0.036],[0.027,0.0375],[0.028,0.040],[0.028,0.072],[0.0285,0.074],[0.037,0.0755],[0.038,0.078],[0.038,0.112]] },
+  trumpet: { name:'ラッパ',       weird:true, stem:false, bowlY:0.016, wall:0.0018, baseR:0.032,
+    inner:[[0,0],[0.010,0],[0.013,0.004],[0.014,0.020],[0.0145,0.050],[0.016,0.075],[0.020,0.095],[0.027,0.110],[0.037,0.122],[0.049,0.131],[0.056,0.135]] },
+  bicone:  { name:'そろばん',     weird:true, stem:false, bowlY:0.012, wall:0.0018, baseR:0.026,
+    inner:[[0,0],[0.006,0],[0.010,0.003],[0.020,0.015],[0.032,0.031],[0.043,0.046],[0.047,0.052],[0.043,0.058],[0.032,0.073],[0.024,0.084],[0.021,0.089]] },
+  urn:     { name:'つぼ',         weird:true, stem:true,  bowlY:0.032, wall:0.0016, stemR:0.0065, footR:0.032, footH:0.005,
+    inner:[[0,0],[0.010,0.001],[0.019,0.008],[0.030,0.024],[0.038,0.045],[0.039,0.060],[0.034,0.077],[0.024,0.092],[0.0195,0.102],[0.020,0.110],[0.025,0.118],[0.028,0.121]] },
+  trophy:  { name:'トロフィー',   weird:true, stem:true,  bowlY:0.075, wall:0.0016, stemR:0.0055, footR:0.036, footH:0.006,
+    inner:[[0,0],[0.020,0.001],[0.031,0.006],[0.036,0.016],[0.0375,0.032],[0.038,0.050],[0.040,0.060],[0.045,0.068],[0.051,0.073],[0.054,0.075]] },
+  snifter: { name:'ブランデー',   weird:true, stem:true,  bowlY:0.034, wall:0.0013, stemR:0.0045, footR:0.036, footH:0.004,
+    inner:[[0,0],[0.018,0.002],[0.034,0.010],[0.046,0.024],[0.051,0.040],[0.049,0.056],[0.042,0.070],[0.033,0.080],[0.027,0.086],[0.026,0.088]] },
+  bulb:    { name:'でんきゅう',   weird:true, stem:false, bowlY:0.012, wall:0.0018, baseR:0.030,
+    inner:[[0,0],[0.010,0],[0.0125,0.003],[0.013,0.012],[0.013,0.036],[0.015,0.046],[0.024,0.058],[0.036,0.070],[0.044,0.084],[0.046,0.099],[0.043,0.114],[0.036,0.126],[0.029,0.133],[0.027,0.136]] },
+  tallv:   { name:'のっぽ',       weird:true, stem:true,  bowlY:0.060, wall:0.0013, stemR:0.0040, footR:0.032, footH:0.004,
+    inner:[[0,0],[0.0025,0.0012],[0.008,0.022],[0.014,0.044],[0.020,0.066],[0.026,0.088],[0.032,0.110],[0.038,0.132],[0.039,0.136]] },
 };
-const CLASSIC = ['bordeaux','burgundy','flute','white','coupe','tumbler','stemless','port'];
-const WEIRD = ['hourglass','martini','fishbowl','tube','flask','twin','saucer','wave'];
+const SEASONS = {
+  1: { ver: 'p1', first: 'bordeaux',
+    sets: {
+      classic: ['bordeaux','burgundy','flute','white','coupe','tumbler','stemless','port'],
+      weird: ['hourglass','martini','fishbowl','tube','flask','twin','saucer','wave'],
+    },
+    flow: [
+      [2, 'same'], [3, 'same'], [2, 'classic'], [5, 'same'], [3, 'classic'], [2, 'weird'],
+      [7, 'same'], [3, 'weird'], [5, 'classic'], [5, 'weird'], [7, 'classic'], [7, 'weird'],
+    ] },
+};
+const COURSES = {
+  c2: { v: 1, first: 'bordeaux',
+    sets: {
+      classic: ['bordeaux','burgundy','flute','white','coupe','tumbler','stemless','port'],
+      weird: ['hourglass','martini','fishbowl','tube','flask','twin','saucer','wave', 'steps','trumpet','bicone','urn','trophy','snifter','bulb','tallv'],
+    },
+    flow: [
+      [2, 'same'], [4, 'same'], [3, 'classic'], [2, 'weird'], [5, 'same'], [4, 'classic'],
+      [6, 'same'], [3, 'weird'], [5, 'classic'], [6, 'classic'], [7, 'same'], [7, 'classic'],
+    ] },
+};
+const FRESH = ['steps','trumpet','bicone','urn','trophy','snifter','bulb','tallv'];
+const SEASON_LIVE = 1;
+const TRY_SEASONS = {
+  2: { ver: 'tc2', cid: 'c2' },
+};
+const TRY_SEASON = parseInt(window.PS_TRY_SEASON || '', 10) || 0;
+const TRY_COURSE = LOCAL ? QS.get('course') || '' : '';
+const SEASON_CHOSEN = !!window.PS_TRY_SEASON || (LOCAL && (QS.has('season') || QS.has('course')));
+const SEASON_PICK = (() => { const k = TRY_SEASON || (LOCAL ? parseInt(QS.get('season') || (TRY_COURSE ? '2' : ''), 10) : 0); return SEASONS[k] || TRY_SEASONS[k] ? k : 0; })();
+function seasonNow(){
+  if (SEASON_PICK && SEASONS[SEASON_PICK]) return SEASON_PICK;
+  if (SEASON_CHOSEN) return SEASON_LIVE;
+  let k = SEASON_LIVE;
+  try { if (WEB && WEB.seasonNow) k = WEB.seasonNow(); } catch (e) { console.error('web', e); }
+  return typeof k === 'number' && SEASONS[k] ? k : SEASON_LIVE;
+}
 function crDense(P, n){
   const m = P.length, out = [];
   const get = i => i < 0 ? [2 * P[0][0] - P[1][0], 2 * P[0][1] - P[1][1]] : i >= m ? [2 * P[m-1][0] - P[m-2][0], 2 * P[m-1][1] - P[m-2][1]] : P[i];
@@ -874,33 +927,109 @@ function writeSave(o){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(o)); 
 const SAVE = Object.assign({ bestStage: 0, sound: true }, loadSave());
 delete SAVE.best; delete SAVE.repBest; delete SAVE.repBestStage;
 AU.on = SAVE.sound !== false;
+const BESTS_KEY = 'pourfect-sommelier.bests';
+function loadBests(){ try { const o = JSON.parse(localStorage.getItem(BESTS_KEY)); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch (e) { return {}; } }
+const bestOf = ver => Math.max(Math.floor(+loadBests()[ver]) || 0, ver === 'p1' ? SAVE.bestStage || 0 : 0);
+const BESTS_KEEP = 8;
+function writeBest(ver, n){
+  const o = loadBests();
+  if (!(n > (Math.floor(+o[ver]) || 0))) return;
+  o[ver] = n;
+  for (const k of Object.keys(o).filter(k => k !== 'p1' && k !== ver).sort().reverse().slice(BESTS_KEEP - 1)) delete o[k];
+  try { localStorage.setItem(BESTS_KEY, JSON.stringify(o)); } catch (e) {}
+}
+const seasonVer = k => SEASONS[k].ver;
+const TODAY_KEY = 'pourfect-sommelier.today';
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+function dayNow(){
+  try { if (WEB && WEB.dayNow){ const d = WEB.dayNow(); if (typeof d === 'string' && DAY_RE.test(d)) return d; } } catch (e) { console.error('web', e); }
+  return new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+}
+function loadToday(){ try { const o = JSON.parse(localStorage.getItem(TODAY_KEY)); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch (e) { return {}; } }
+function todayOf(ver, day = dayNow()){ const o = loadToday(); return o.day === day && o.ver === ver ? Math.floor(+o.best) || 0 : 0; }
+function writeToday(ver, n, day = dayNow()){
+  if (!(n > todayOf(ver, day))) return;
+  try { localStorage.setItem(TODAY_KEY, JSON.stringify({ day, ver, best: n })); } catch (e) {}
+}
+const SET_RE = /^[a-z]{1,12}$/, VER_RE = /^[a-z][a-z0-9-]{1,23}$/, CID_RE = /^[a-z0-9]{1,12}$/;
+const ownKey = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+const plainObj = o => !!o && typeof o === 'object' && !Array.isArray(o);
+const knownGlass = id => typeof id === 'string' && ownKey(GL, id);
+const roomyGlass = id => glassType(id).cap * T.shareCap >= T.share[0];
+function checkCourse(c){
+  if (!plainObj(c) || c.v !== 1 || !plainObj(c.sets) || !Array.isArray(c.flow) || c.flow.length < 1 || c.flow.length > 24) return null;
+  const sets = {};
+  for (const k of Object.keys(c.sets)){
+    const a = c.sets[k];
+    if (!SET_RE.test(k) || k === 'same' || !Array.isArray(a) || !a.length || !a.every(knownGlass) || new Set(a).size !== a.length) return null;
+    sets[k] = a.slice();
+  }
+  const flow = [];
+  for (const row of c.flow){
+    if (!Array.isArray(row) || row.length !== 2) return null;
+    const n = row[0], kind = row[1];
+    if (!Number.isInteger(n) || n < 2 || n > 7) return null;
+    if (kind === 'same'){ if (!ownKey(sets, 'classic') || !sets.classic.some(roomyGlass)) return null; flow.push([n, 'same']); }
+    else if (typeof kind === 'string'){ if (!SET_RE.test(kind) || !ownKey(sets, kind) || sets[kind].length < n) return null; flow.push([n, kind]); }
+    else if (Array.isArray(kind)){ if (kind.length !== n || !kind.every(knownGlass)) return null; flow.push([n, kind.slice()]); }
+    else return null;
+  }
+  if (!knownGlass(c.first) || !ownKey(sets, 'classic') || !sets.classic.includes(c.first) || !roomyGlass(c.first)) return null;
+  return { v: 1, first: c.first, sets, flow };
+}
+function makeSeason(n, o, trial = false){
+  if (!Number.isInteger(n) || n < 2 || n > 99999 || !plainObj(o)) return null;
+  if (typeof o.ver !== 'string' || !VER_RE.test(o.ver) || o.ver === 'p1') return null;
+  const cid = o.cid == null ? null : o.cid;
+  if (cid !== null && (typeof cid !== 'string' || !CID_RE.test(cid))) return null;
+  const src = o.course != null ? o.course : cid !== null && ownKey(COURSES, cid) ? COURSES[cid] : null;
+  const c = src && checkCourse(src);
+  return c ? { ver: o.ver, cid, first: c.first, sets: c.sets, flow: c.flow, weekly: true, trial } : null;
+}
+const seasonQueue = new Map();
+function setSeason(n, o){
+  try {
+    if (SEASON_CHOSEN && n === SEASON_PICK) return false;
+    const z = makeSeason(n, o);
+    if (!z) return false;
+    if (S.phase === 'title' || S.phase === 'gallery'){ SEASONS[n] = z; seasonQueue.delete(n); }
+    else seasonQueue.set(n, z);
+    return true;
+  } catch (e) { console.error('season', e); return false; }
+}
+function applySeasonQueue(){ for (const [n, z] of seasonQueue) SEASONS[n] = z; seasonQueue.clear(); }
+if (SEASON_PICK && !SEASONS[SEASON_PICK]){
+  const t = TRY_SEASONS[SEASON_PICK], cid = TRY_COURSE || t.cid, z = makeSeason(SEASON_PICK, { ver: TRY_COURSE ? 't' + TRY_COURSE : t.ver, cid }, true);
+  if (z) SEASONS[SEASON_PICK] = z; else console.error(`試すシーズン ${SEASON_PICK}: 並び ${cid} を入れられない`);
+}
 const S = {
   phase: 'title', t: 0, stageNo: 1, stage: null, glasses: [], cur: 0, rng: mulberry32(1),
   holding: false, dragY0: 0, dragY: 0, ready: 0, emitted: 0, stopT: 0, spilled: 0,
   rigFrom: 0, rigTo: 0, rigX: 0, result: null, revealed: 0,
   best0: 0, fin: 0, toast: null, run: [], lives: T.lives, served: 0,
+  season: SEASONS[SEASON_PICK] ? SEASON_PICK : SEASON_LIVE,
 };
 const B = { V: 0, spin: { x: -T.rigYawWide, v: 0 }, spinOff: { x: 0, v: 0 }, spinOffT: 0,
   qIns: new THREE.Quaternion(), qInsT: new THREE.Quaternion(), sl: { x: 0, z: 0, vx: 0, vz: 0 }, qPrev: null, stopper: 1, th: { x: 0, v: 0 }, thT: 0, mx: { x: 0.09, v: 0 }, my: { x: 0.32, v: 0 }, mz: { x: 0, v: 0 }, mxT: 0.09, myT: 0.32, mzT: 0,
   Q: 0, level: -1, d: -1, glug: 0, dripAcc: 0, chain: null, flowing: false };
 function shuffle(a, rng){ a = a.slice(); for (let i = a.length - 1; i > 0; i--){ const j = (rng() * (i + 1)) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; }
-const FLOW = [
-  [2, 'same'], [3, 'same'], [2, 'classic'], [5, 'same'], [3, 'classic'], [2, 'weird'],
-  [7, 'same'], [3, 'weird'], [5, 'classic'], [5, 'weird'], [7, 'classic'], [7, 'weird'],
-];
-function makeStage(no, rng){
-  const lap = Math.floor((no - 1) / FLOW.length), [n, kind] = FLOW[(no - 1) % FLOW.length];
+function makeStage(no, rng, season = S.season){
+  const SZ = SEASONS[season], flow = SZ.flow;
+  const lap = Math.floor((no - 1) / flow.length), [n, kind] = flow[(no - 1) % flow.length];
   let ids;
-  if (kind === 'same'){
-    const ok = CLASSIC.filter(id => glassType(id).cap * T.shareCap >= T.share[0]);
-    ids = Array(n).fill(no === 1 ? 'bordeaux' : ok[(rng() * ok.length) | 0]);
-  } else ids = shuffle(kind === 'weird' ? WEIRD : CLASSIC, rng).slice(0, n);
+  if (Array.isArray(kind)){
+    ids = kind.slice();
+    if (DEV && ids.length !== n) console.error(`シーズン ${season} の流れの ${(no - 1) % flow.length + 1} 行目: 人数 ${n} とグラスの数 ${ids.length} がちがう`);
+  } else if (kind === 'same'){
+    const ok = SZ.sets.classic.filter(id => glassType(id).cap * T.shareCap >= T.share[0]);
+    ids = Array(n).fill(no === 1 ? SZ.first : ok[(rng() * ok.length) | 0]);
+  } else ids = shuffle(SZ.sets[kind], rng).slice(0, n);
   const wine = no <= 2 ? 'red' : ['red', 'red', 'rose', 'white'][(rng() * 4) | 0];
   const tol = Math.max(T.tolMin, T.tol - T.tolLap * lap);
   const minCap = Math.min(...ids.map(id => glassType(id).cap));
   const target = Math.min(lerp(T.share[0], T.share[1], rng()), minCap * T.shareCap, T.bottleMax / n);
   const total = Math.min(T.bottleMax, Math.max(n * 30, Math.round(target * n / 10) * 10));
-  return { no, lap, kind, n, ids, wine, tol, total, target: total / n };
+  return { no, lap, kind: Array.isArray(kind) ? 'fixed' : kind, n, ids, wine, tol, total, target: total / n };
 }
 function clearStage(){
   lastSig = '';
@@ -1481,8 +1610,12 @@ function showResult(){
     if (R.perfect && S.lives < T.lives){ S.lives++; mark = S.lives - 1; kind = 'gain'; }
   } else { S.lives = Math.max(0, S.lives - 1); mark = S.lives; kind = 'lost'; }
   const over = !R.pass && S.lives <= 0;
-  const cleared = S.served;
-  if (S.official && cleared > SAVE.bestStage){ SAVE.bestStage = cleared; writeSave(SAVE); }
+  const cleared = S.served, ver = seasonVer(S.season), day = dayNow();
+  if (S.official){
+    if (ver === 'p1' && cleared > SAVE.bestStage){ SAVE.bestStage = cleared; writeSave(SAVE); }
+    writeBest(ver, cleared);
+    writeToday(ver, cleared, day);
+  }
   if (R.pass) S.run.push({ no: st.no, g: st.ids.slice(), t: st.total, v: R.rows.map(r => Math.round(r.vol * 10)) });
   $('rTitle').textContent = R.overflow ? 'グラスからあふれました' : R.perfect ? 'POURFECT！ 全員ぴったり' : R.pass ? '全員ご満足いただけました' : 'ご不満のお客様が…';
   const bad = R.rows.filter(r => Math.abs(r.dev) > st.tol).length;
@@ -1492,7 +1625,8 @@ function showResult(){
     : R.perfect ? (kind === 'gain' ? nb(`全員がひとり分の ${pm(T.pourfect)} 以内でした。`) + nb('ライフが 1 つ戻りました') : nb(`全員がひとり分の ${pm(T.pourfect)} 以内でした`)) : nb(`いちばん離れたお客様でも ${pct(R.worst, st.tol)}`);
   $('rLine').hidden = !(over || mark >= 0);
   $('rLeft').innerHTML = over ? `ご満足いただけたのは <b>${cleared}</b> 組` : `ライフ <span class="lives" role="img" aria-label="ライフ ${S.lives}">${livesHtml(mark, kind)}</span>`;
-  $('rRight').innerHTML = !over ? '' : S.official && cleared > S.best0 ? '<i class="newrec">新記録</i>' : SAVE.bestStage > 0 ? `ベスト <b>${SAVE.bestStage}</b> 組` : '';
+  const best = over ? bestOf(ver) : 0, today0 = day === S.day0 ? S.today0 : 0, wk = SEASONS[S.season].weekly ? '今週の' : '';
+  $('rRight').innerHTML = !over ? '' : S.official && cleared > S.best0 ? `<i class="newrec">${wk}新記録</i>` : S.official && cleared > today0 ? '<i class="newrec">今日のベスト</i>' : best > 0 ? `${wk}ベスト <b>${best}</b> 組` : '';
   $('btnNext').hidden = over; $('btnRetry').hidden = !over; $('btnTitle').hidden = !over;
   card.hidden = false; card.classList.remove('judging');
   clearTimeout(showResult.tm); showResult.tm = setTimeout(() => { if (!card.classList.contains('judging')) card.classList.add('open'); }, 520);
@@ -1501,7 +1635,7 @@ function showResult(){
   if (R.perfect){ $('app').classList.add('pourfect'); sparkle(); }
   toPhase('result');
   if (mark >= 0) $('hLives').innerHTML = livesHtml(mark, kind);
-  if (WEB) WEB.onResult({ pass: R.pass, over, cleared, stages: S.run, official: S.official });
+  if (WEB) WEB.onResult({ pass: R.pass, over, cleared, stages: S.run, official: S.official, season: S.season, ver });
 }
 function toastUpdate(dt){
   const A = S.toast; if (!A || A.done) return;
@@ -1745,7 +1879,7 @@ function placeLabels(){
 }
 function debugOut(){
   const d = $('dbg'); if (!d) return; d.hidden = false;
-  d.textContent = `phase ${S.phase}  θ ${(B.th.x / DEG).toFixed(1)}° (ready ${(S.ready / DEG).toFixed(1)}°)\nbottle ${(B.V * 1e6).toFixed(1)}ml  d ${(B.d * 1000).toFixed(1)}mm  Q ${(B.Q * 1e6).toFixed(1)}ml/s\n` +
+  d.textContent = `season ${S.season}  phase ${S.phase}  θ ${(B.th.x / DEG).toFixed(1)}° (ready ${(S.ready / DEG).toFixed(1)}°)\nbottle ${(B.V * 1e6).toFixed(1)}ml  d ${(B.d * 1000).toFixed(1)}mm  Q ${(B.Q * 1e6).toFixed(1)}ml/s\n` +
     S.glasses.map(G => `${G.i + 1}:${G.ty.name} ${G.vol.toFixed(1)}/${G.ty.cap.toFixed(0)}ml`).join('\n') + `\nspilled ${S.spilled.toFixed(2)}ml  chains ${chains.length} drops ${drops.length} foam ${foam.length}`;
 }
 let pid = null, pidType = '';
@@ -1788,6 +1922,7 @@ document.addEventListener('visibilitychange', () => {
 });
 for (const ev of ['pageshow', 'focus']) window.addEventListener(ev, () => { lastSig = ''; auResume(); });
 for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) window.addEventListener(ev, auResume, true);
+const gallerySet = key => SEASONS[S.season].sets[key] || (LOCAL && (Object.values(SEASONS).map(z => z.sets[key]).find(Boolean) || (key === 'fresh' && FRESH))) || SEASONS[S.season].sets.classic;
 function gallery(ids, fill = 0.32, wine = 'red'){
   clearStage();
   $('title').hidden = true; $('intro').hidden = true; $('result').hidden = true; $('hud').hidden = true;
@@ -1799,8 +1934,12 @@ function gallery(ids, fill = 0.32, wine = 'red'){
 }
 function startRun(){
   if (WEB && WEB.onRunStart) try { WEB.onRunStart(); } catch (e) { console.error('web', e); }
-  S.official = START_STAGE === 1 && !DEBUG;
-  S.best0 = SAVE.bestStage; S.run = []; S.lives = T.lives; S.served = 0;
+  applySeasonQueue();
+  S.season = seasonNow();
+  S.official = START_STAGE === 1 && !DEBUG && !SEASON_CHOSEN;
+  try { if (WEB && WEB.runOfficial && WEB.runOfficial() === false) S.official = false; } catch (e) { console.error('web', e); }
+  S.best0 = bestOf(seasonVer(S.season)); S.run = []; S.lives = T.lives; S.served = 0;
+  S.day0 = dayNow(); S.today0 = todayOf(seasonVer(S.season), S.day0);
   S.rng = mulberry32((Math.random() * 2 ** 31) | 0);
   $('title').hidden = true;
   loadStage(START_STAGE);
@@ -1812,18 +1951,26 @@ function toTitle(){
   setWine('red'); B.V = 430e-6; S.rigX = 0; setIdlePose(true);
   camGo(frameTitle(), 1.0);
   $('hud').hidden = true; $('intro').hidden = true; $('result').hidden = true; $('title').hidden = false;
-  $('tBest').textContent = SAVE.bestStage ? `ベスト ${SAVE.bestStage} 組` : '';
+  applySeasonQueue(); S.season = seasonNow(); showTitleBest();
   phaseChanged();
   if (WEB) WEB.onTitle();
 }
-if (DEV) window.__ps = { S, B, T, BOT, AU, TYPES, glassType, chains, drops, foam, idlePose, uprightReach, bakeEnv, endPointer, grab, release, setDrag: y => { S.dragY = y; }, loadStage: (no, custom) => { S.official = false; loadStage(no, custom); }, startRun, makeStage, FLOW, auBuild, auPour, WATER, BGM, auBgmLevel, auBgmDecode, auBgmLinear, keepInside, beginPouring,
+function showTitleBest(){
+  const z = SEASONS[S.season], b = bestOf(z.ver), t = todayOf(z.ver), wk = z.weekly ? '今週の' : '';
+  $('tBest').textContent = b ? `${wk}ベスト ${b} 組` + (t ? `・今日 ${t} 組` : '') : t ? `今日 ${t} 組` : '';
+}
+function titleRefresh(){ if (S.phase !== 'title') return; S.season = seasonNow(); showTitleBest(); }
+if (DEV) window.__ps = { S, B, T, BOT, AU, TYPES, glassType, chains, drops, foam, idlePose, uprightReach, bakeEnv, endPointer, grab, release, setDrag: y => { S.dragY = y; }, loadStage: (no, custom) => { S.official = false; loadStage(no, custom); }, startRun, makeStage, SEASONS, SEASON_LIVE, COURSES, setSeason, checkCourse, seasonNow, bestOf, titleRefresh, toTitle, FRESH,
+  dayNow, todayOf, get todayBest(){ return todayOf(seasonVer(S.season)); },
+  get season(){ return S.season; }, get FLOW(){ return SEASONS[S.season].flow; }, auBuild, auPour, WATER, BGM, auBgmLevel, auBgmDecode, auBgmLinear, keepInside, beginPouring,
   judgeWith(vols){ S.official = false; $('intro').hidden = true; S.glasses.forEach((G, i) => { G.vol = vols[i]; G.dirty = true; G.overflow = false; }); B.V = 0; S.cur = S.glasses.length - 1; toPhase('settle'); }, inspectStart, inspectMove, inspectEnd, renderer, cam, scene, CAM, bClip, sceneRT, backRT, THREE,
   gallery, advance(sec, fps = 60){ for (let t = 0; t < sec; t += 1 / fps) tick(1 / fps); lastSig = frameSig(); render(); return S.phase; },
   idle(){ tick(1 / 60); return !(busy() || frameSig() !== lastSig); } };
 resize();
 toTitle();
-try { if (WEB) WEB.attach({ phase: () => S.phase, sfx, auInit, hold: auHold, soundOn: () => AU.on, canQuit, quit: quitRun }); } catch (e) { console.error('web', e); }
-if (QS.has('gallery')) gallery(QS.get('gallery') === 'weird' ? WEIRD : CLASSIC, parseFloat(QS.get('fill') || '0.32'), QS.get('wine') || 'red');
+try { if (WEB) WEB.attach({ phase: () => S.phase, sfx, auInit, hold: auHold, soundOn: () => AU.on, canQuit, quit: quitRun,
+  seasons: Object.fromEntries(Object.entries(SEASONS).filter(([, z]) => !z.weekly).map(([k, z]) => [k, { ver: z.ver }])), seasonDefault: SEASON_LIVE, titleRefresh, setSeason }); } catch (e) { console.error('web', e); }
+if (QS.has('gallery')) gallery(gallerySet(QS.get('gallery')), parseFloat(QS.get('fill') || '0.32'), QS.get('wine') || 'red');
 CAM.t = 1;
 requestAnimationFrame(t => { lastT = t; frame(t); });
 clearTimeout(window.__psLoadTimer);

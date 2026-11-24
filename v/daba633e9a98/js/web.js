@@ -1,15 +1,18 @@
 (function(){
 'use strict';
 const NATIVE=window.PS_NATIVE||null;
-const WEB_VERSION='1.3.1';
+const WEB_VERSION='1.4.0';
 const SITE_URL='https://pourfect-sommelier.kumao.app/';
 const APP_URL='https://apps.apple.com/jp/app/id6834156070?pt=129314143&ct=web&mt=8';
 const IOS_DEVICE=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 const VERSION_LABEL=NATIVE?`iOS 版 ${NATIVE.version}`:`ブラウザ版 ${WEB_VERSION}`;
 const LOCAL=/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
 const API=(NATIVE&&NATIVE.api)||(LOCAL&&new URLSearchParams(location.search).get('ranking')==='local'?'http://127.0.0.1:8792':'https://pourfectsommelier-ranking.saikyo-eigo.workers.dev');
-const VER='p1', TERMS_VERSION=2, NAME_MAX=10, BOARD_SIZE=50, TIMEOUT_MS=8000;
-const KEY={rank:'pourfect-sommelier.ranking',pending:'pourfect-sommelier.pending',probe:'pourfect-sommelier.probe',save:'pourfect-sommelier.v1',badges:'pourfect-sommelier.badges'};
+const TEST_NOW=LOCAL?Date.parse(new URLSearchParams(location.search).get('now')||''):NaN, LOADED_AT=Date.now();
+const clock=()=>Number.isFinite(TEST_NOW)?TEST_NOW+(Date.now()-LOADED_AT):Date.now();
+const TERMS_VERSION=2, NAME_MAX=10, BOARD_SIZE=50, TIMEOUT_MS=8000;
+const KEY={rank:'pourfect-sommelier.ranking',pending:'pourfect-sommelier.pending2',pendingOld:'pourfect-sommelier.pending',probe:'pourfect-sommelier.probe',save:'pourfect-sommelier.v1',badges:'pourfect-sommelier.badges',
+  bests:'pourfect-sommelier.bests',season:'pourfect-sommelier.season'};
 const TRIAL=['debug','stage','gallery'].some(k=>new URLSearchParams(location.search).has(k));
 const TERMS_PROMO='ランキングの名前と組の数を、運営がゲームの紹介（X などの SNS）に載せることがあります。載せてほしくないときは、お問い合わせからお知らせください。';
 const TERMS=[
@@ -27,12 +30,12 @@ let g=null;
 let last=null;
 let lastCleared=0;
 const load=k=>{ try{ return JSON.parse(localStorage.getItem(k)); }catch(e){ return null; } };
-const save=(k,v)=>{ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} };
+const save=(k,v)=>{ try{ localStorage.setItem(k,JSON.stringify(v)); return true; }catch(e){ return false; } };
 const drop=k=>{ try{ localStorage.removeItem(k); }catch(e){} };
 const $=id=>document.getElementById(id);
 function el(tag,cls,text){ const e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=text; return e; }
 const tap=()=>{ try{ if(g){ g.auInit(); g.sfx('tap'); } }catch(e){} };
-class HttpError extends Error{ constructor(status,code){ super(code||`HTTP ${status}`); this.status=status; this.code=code; } }
+class HttpError extends Error{ constructor(status,code,reason,data){ super(code||`HTTP ${status}`); this.status=status; this.code=code; this.reason=reason; this.data=data||{}; } }
 function graphemes(t){ return typeof Intl!=='undefined'&&Intl.Segmenter?Array.from(new Intl.Segmenter('ja',{granularity:'grapheme'}).segment(t),x=>x.segment):Array.from(t); }
 function cleanText(s){
   return String(s||'').replace(/[\u0000-\u001f\u007f-\u009f​‎‏‪-‮⁠-⁩﻿]/g,'').trim();
@@ -41,7 +44,96 @@ function cleanName(s){ return graphemes(cleanText(s)).slice(0,NAME_MAX).join('')
 const PLAIN_NAME=/^[\u0020-\u007e\u3000-\u30ff\uff01-\uff5e]*$/;
 function nameFont(e,name){ e.classList.toggle('rk-sys',!PLAIN_NAME.test(String(name||''))); return e; }
 function newUid(){ const a=new Uint8Array(16); crypto.getRandomValues(a); return Array.from(a,x=>x.toString(16).padStart(2,'0')).join(''); }
-function loadPending(){ const p=load(KEY.pending); if(p&&p.ver!==VER){ drop(KEY.pending); return null; } return p; }
+const isObj=o=>!!o&&typeof o==='object'&&!Array.isArray(o);
+const DAY_MS=86400000, JST_MS=9*3600000;
+const jstDay=ms=>new Date(ms+JST_MS).toISOString().slice(0,10);
+const addDays=(d,k)=>new Date(Date.parse(`${d}T00:00:00Z`)+k*DAY_MS).toISOString().slice(0,10);
+const isDay=d=>typeof d==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(d)&&Number.isFinite(Date.parse(`${d}T00:00:00Z`));
+let seasonMap=null, seasonDef=1;
+const loadSeason=()=>{ const o=load(KEY.season); return isObj(o)?o:{}; };
+let sz=loadSeason();
+let szStored=true;
+const szBase=()=>({...sz,...(szStored?loadSeason():{})});
+function putSeason(o){ sz={...szBase(),...o}; szStored=save(KEY.season,sz); }
+const serverNow=()=>clock()+(Number(sz.off)||0);
+const CID_RE=/^[a-z0-9]{1,12}$/;
+function seasonRows(){
+  return (Array.isArray(sz.seasons)?sz.seasons:[]).filter(r=>isObj(r)&&Number.isInteger(r.n)&&r.n>0&&typeof r.ver==='string'&&isDay(r.from)&&(r.to==null||isDay(r.to))&&(r.cid==null||CID_RE.test(r.cid)));
+}
+function weekOn(){ const rows=seasonRows(); return rows.length>1||rows.some(r=>!!r.to); }
+const installed=new Map();
+const rowSig=r=>`${r.ver}|${r.cid}|${isObj(r.course)?JSON.stringify(r.course):''}`;
+function installWeeks(){
+  if(!g) return false;
+  const day=jstDay(serverNow());
+  let changed=false;
+  for(const r of seasonRows()){
+    if(!r.cid||(r.to&&r.to<day)) continue;
+    const sig=rowSig(r), st=installed.get(r.n);
+    if(st&&st.sig===sig) continue;
+    let ok=false;
+    try{ ok=typeof g.setSeason==='function'&&g.setSeason(r.n,{ver:r.ver,cid:r.cid,...(isObj(r.course)?{course:JSON.parse(JSON.stringify(r.course))}:{})})===true; }catch(e){ ok=false; }
+    installed.set(r.n,{sig,ok,ver:r.ver,cid:r.cid}); changed=true;
+  }
+  return changed;
+}
+function seasonInfo(){
+  const rows=seasonRows(), day=jstDay(serverNow());
+  const base={play:seasonDef,row:null,next:null,prev:[],cid:null,stale:false,lost:false,wait:false,day};
+  if(!rows.length) return base;
+  let i=-1; rows.forEach((r,k)=>{ if(r.from<=day) i=k; });
+  const row=i>=0?rows[i]:null;
+  if(!row||(row.to&&row.to<day)) return {...base,lost:true};
+  const s={...base,row,next:rows[i+1]||null,prev:rows.slice(0,i).reverse()};
+  if(row.cid){
+    const st=installed.get(row.n);
+    if(!st||st.sig!==rowSig(row)) return {...s,wait:true};
+    return st.ok?{...s,play:row.n,cid:row.cid}:{...s,stale:true};
+  }
+  const known=seasonMap||(isObj(sz.known)?sz.known:null);
+  return !known||known[row.n]===row.ver?{...s,play:row.n}:{...s,stale:true};
+}
+const sendable=s=>!s.stale&&!s.lost&&!s.wait;
+function verOf(n){
+  const r=seasonRows().find(x=>x.n===n&&x.cid), st=r&&installed.get(n);
+  if(st&&st.ok&&st.ver===r.ver) return r.ver;
+  const m=seasonMap||(isObj(sz.known)?sz.known:{}); return typeof m[n]==='string'?m[n]:n===1?'p1':null;
+}
+const curVer=s=>{ s=s||seasonInfo(); return s.row&&s.row.cid?s.row.ver:verOf(s.play)||'p1'; };
+function verRank(ver){
+  if(ver==='p1') return 1;
+  const m=/^w(\d{4})(\d{2})(\d{2})$/.exec(String(ver)); if(m) return 2+Date.UTC(+m[1],+m[2]-1,+m[3])/DAY_MS;
+  return 0;
+}
+let seasonAskAt=0, seasonAsking=null;
+function askSeason(force){
+  if(seasonAsking) return seasonAsking;
+  if(!force&&Date.now()-seasonAskAt<5*60000) return Promise.resolve();
+  seasonAskAt=Date.now();
+  seasonAsking=(async()=>{
+    const t0=clock();
+    try{
+      const r=await Rank.call('GET','/v1/season');
+      if(isObj(r)&&Array.isArray(r.seasons)&&Number.isFinite(r.now)){
+        putSeason({seasons:r.seasons.filter(isObj).map(x=>({n:x.n,ver:x.ver,from:x.from,to:x.to==null?null:x.to,state:x.state,
+          ...(typeof x.cid==='string'?{cid:x.cid}:{}),...(isObj(x.course)?{course:x.course}:{})})),off:Math.round(r.now-(t0+clock())/2),at:Date.now()});
+      }
+    }catch(e){
+      if(e.status===404&&(sz.seasons||sz.off)){ const o=szBase(); delete o.seasons; delete o.off; sz=o; szStored=save(KEY.season,sz); }
+    }
+    seasonUpdate();
+    seasonSettled=true; showToast();
+  })().finally(()=>{ seasonAsking=null; });
+  return seasonAsking;
+}
+let seasonSettled=false;
+const keepRec=(a,b)=>!b||verRank(a.ver)>verRank(b.ver)||(a.ver===b.ver&&a.cleared>b.cleared);
+function loadPending(){
+  const read=k=>{ const p=load(k); if(p&&!(isObj(p)&&typeof p.ver==='string'&&p.cleared>0)){ drop(k); return null; } return p; };
+  let p=read(KEY.pending); const o=read(KEY.pendingOld);
+  if(o){ if(keepRec(o,p)){ p=o; save(KEY.pending,p); } drop(KEY.pendingOld); }
+  return p;
+}
 const Rank={
   state:load(KEY.rank)||{},
   pending:loadPending(),
@@ -55,30 +147,35 @@ const Rank={
       let r=null; try{ r=await NATIVE.fetch(method,API+path,body?JSON.stringify(body):null,TIMEOUT_MS); }catch(e){}
       if(!r||!r.status) throw new HttpError(0,'offline');
       let j={}; try{ j=JSON.parse(r.body); }catch(e){}
-      if(r.status<200||r.status>=300) throw new HttpError(r.status,j.error);
+      if(r.status<200||r.status>=300) throw new HttpError(r.status,j.error,j.reason,j);
       return j;
     }
     const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),TIMEOUT_MS);
     try{
-      const res=await fetch(API+path,{method,headers:body?{'content-type':'application/json'}:{},body:body?JSON.stringify(body):undefined,signal:ctl.signal,cache:'no-store'});
+      const headers=body?{'content-type':'application/json'}:{};
+      if(Number.isFinite(TEST_NOW)) headers['x-test-now']=String(Math.round(clock()));
+      const res=await fetch(API+path,{method,headers,body:body?JSON.stringify(body):undefined,signal:ctl.signal,cache:'no-store'});
       let j={}; try{ j=await res.json(); }catch(e){}
-      if(!res.ok) throw new HttpError(res.status,j.error);
+      if(!res.ok) throw new HttpError(res.status,j.error,j.reason,j);
       return j;
     }catch(e){
       if(e instanceof HttpError) throw e;
       throw new HttpError(0,'offline');
     }finally{ clearTimeout(timer); }
   },
-  enqueue(rec){ if(!this.pending||this.pending.ver!==VER||rec.cleared>this.pending.cleared){ this.pending={...rec,ver:VER}; save(KEY.pending,this.pending); } },
+  enqueue(rec){
+    const p=this.pending;
+    if(keepRec(rec,p)){ this.pending={...rec}; save(KEY.pending,this.pending); }
+  },
   push(){
     if(this.pushing) return this.pushing;
     this.pushing=(async()=>{
       let out=this.lastSent||null;
       while(this.pending&&this.joined){
         const rec=this.pending, uid=this.state.uid;
-        if(rec.ver!==VER){ this.pending=null; drop(KEY.pending); continue; }
         try{
-          out=await this.call('POST','/v1/submit',{uid,ver:VER,cleared:rec.cleared,stages:rec.stages,...(NATIVE?{src:'ios'}:{})});
+          out=await this.call('POST','/v1/submit',{uid,ver:rec.ver,...(rec.cid?{cid:rec.cid}:{}),cleared:rec.cleared,stages:rec.stages,...(NATIVE?{src:'ios'}:{})});
+          if(isObj(out)) out.weekly=!!rec.cid;
           this.lastSent=out;
           if(this.pending===rec){ this.pending=null; drop(KEY.pending); }
         }catch(e){
@@ -88,6 +185,10 @@ const Rank={
           }
           if(e.status===0||e.status===429||e.status>=500) return null;
           if(this.pending===rec){ this.pending=null; drop(KEY.pending); }
+          if(e.code==='closed'||e.code==='not open'||e.code==='course'){
+            await askSeason(true).catch(()=>{});
+            return {rejected:true,code:e.code,ver:e.data.ver,season:e.data.season,to:e.data.to,from:e.data.from,current:e.data.current,cleared:rec.cleared};
+          }
           return {rejected:true};
         }
       }
@@ -106,6 +207,7 @@ const Rank={
       this.push().then(r2=>{ if(resultOpen()) reportRank(r2); }).catch(()=>{});
       return null;
     }catch(e){
+      if(e.code==='ng name'&&e.reason==='taken') return this.joined?['その名前は、','ほかの人が使っています']:['その名前は、ほかの人が使っています。','別の端末の自分の名前なら、','一覧の下の「引き継ぎコードで戻す」から'];
       if(e.code==='ng name'||e.code==='bad name') return 'その名前は使えません';
       if(e.status===429) return '少し時間をおいて試してください';
       return 'つながりませんでした';
@@ -114,9 +216,12 @@ const Rank={
   async agree(){
     const uid=this.state.uid;
     try{
-      let name=this.state.name;
-      const b=await this.call('GET',`/v1/board?${new URLSearchParams({ver:VER,uid,limit:'1'})}`);
-      if(b&&b.mine&&b.mine.name) name=b.mine.name;
+      let name=this.state.name, got=false;
+      try{ const m=await this.call('GET',`/v1/me?${new URLSearchParams({uid})}`); if(m&&typeof m.name==='string'&&m.name){ name=m.name; got=true; } }catch(e){}
+      if(!got){
+        const b=await this.call('GET',`/v1/board?${new URLSearchParams({ver:curVer(),uid,limit:'1'})}`);
+        if(b&&b.mine&&b.mine.name) name=b.mine.name;
+      }
       const r=await this.call('POST','/v1/register',{uid,name,terms:TERMS_VERSION});
       if(this.state.uid===uid){ this.state={...this.state,joined:true,name:r.name||name,pid:r.pid||this.state.pid||'',terms:TERMS_VERSION}; save(KEY.rank,this.state); }
       return null;
@@ -139,11 +244,11 @@ const Rank={
     if(/[\u3040-\u30ff\u4e00-\u9fff]/.test(t.replace(/ー/g,''))) return 'かなになっています。英字（ABC）のキーボードで入れてください';
     if(code.length!==12) return 'コードは 12 文字です（- は無くてもかまいません）';
     try{
-      const r=await this.call('POST','/v1/code/use',{code,ver:VER});
+      const ver=curVer(), r=await this.call('POST','/v1/code/use',{code,ver});
       const carry=last&&resultOpen()&&!this.pending&&!this.lastSent;
       this.state={joined:true,uid:r.uid,name:r.name,pid:r.pid||'',terms:r.terms||1}; save(KEY.rank,this.state); this.lastSent=null; drop(KEY.badges);
       if(carry) this.enqueue(last);
-      try{ const sv=load(KEY.save)||{}; if((r.best||0)>(sv.bestStage||0)){ sv.bestStage=r.best; save(KEY.save,sv); } }catch(e){}
+      mergeBests(isObj(r.bests)?r.bests:r.best>0?{[ver]:r.best}:{});
       return null;
     }catch(e){
       if(e.status===404) return 'そのコードは見つかりません。作り直したコードは、前のものが使えなくなります';
@@ -160,26 +265,80 @@ const Rank={
       return null;
     }catch(e){ return 'つながりませんでした。もう一度試してください'; }
   },
-  forget(){ this.state={}; drop(KEY.rank); this.pending=null; drop(KEY.pending); this.lastSent=null; drop(KEY.badges); showBadges(null); },
+  forget(){ this.state={}; drop(KEY.rank); this.pending=null; drop(KEY.pending); drop(KEY.pendingOld); this.lastSent=null; drop(KEY.badges); showBadges(null); },
 };
 const GONE_MSG=['この名前はランキングを','やめています','（ほかの端末でやめたなど）'];
+function mergeBests(o){
+  try{
+    const b=load(KEY.bests), cur=isObj(b)?b:{};
+    let changed=false;
+    for(const v of Object.keys(o)){
+      const n=Math.floor(+o[v])||0;
+      if(!/^[0-9a-z-]{1,20}$/.test(v)||n<=0) continue;
+      if(n>(Math.floor(+cur[v])||0)){ cur[v]=n; changed=true; }
+      if(v==='p1'){ const sv=load(KEY.save), s=isObj(sv)?sv:{}; if(n>(s.bestStage||0)){ s.bestStage=n; save(KEY.save,s); } }
+    }
+    for(const k of Object.keys(cur).filter(k=>k!=='p1').sort().reverse().slice(8)){ delete cur[k]; changed=true; }
+    if(changed) save(KEY.bests,cur);
+  }catch(e){}
+}
 const resultOpen=()=>!$('result').hidden&&!$('rkOpen').hidden;
 function setStatus(text){
   const s=$('rkStatus');
-  if(Array.isArray(text)) s.replaceChildren(...text.map(t=>el('span','nb',t))); else s.textContent=text||'';
+  if(Array.isArray(text)) s.replaceChildren(...text.map(t=>typeof t==='string'?el('span','nb',t):t)); else s.textContent=text||'';
   s.hidden=!(Array.isArray(text)?text.length:text);
 }
+const lastOk=()=>!!last&&last.ver===curVer();
 function refreshResultButton(){
-  $('rkOpen').textContent=!Rank.joined&&last?'ランキングに載せる':'ランキングを見る';
+  $('rkOpen').textContent=!Rank.joined&&lastOk()?'ランキングに載せる':'ランキングを見る';
+}
+const STALE_MSG=['今週のステージには、','新しい版が要ります。'];
+const LOST_MSG=['今週のステージを受け取れていないので、','この回は載りません'];
+const APP_UPDATE_URL='https://apps.apple.com/jp/app/id6834156070';
+function staleButton(cls){
+  if(NATIVE){ const a=el('a',cls,'App Store を開く'); a.href=APP_UPDATE_URL; a.target='_blank'; a.rel='noopener'; return a; }
+  const b=el('button',cls,'読み直す'); b.type='button'; b.onclick=()=>{ tap(); b.disabled=true; b.textContent='読み込んでいます…'; freshReload(); }; return b;
+}
+async function freshReload(){
+  const within=(p,ms)=>Promise.race([p,new Promise(r=>setTimeout(r,ms))]);
+  try{
+    const reg='serviceWorker' in navigator?await within(navigator.serviceWorker.getRegistration(),2000):null;
+    if(reg){
+      await within(reg.update().catch(()=>{}),6000);
+      const w=reg.installing||reg.waiting;
+      if(w) await within(new Promise(res=>{ const f=()=>{ if(w.state==='activated'||w.state==='redundant') res(); }; w.addEventListener('statechange',f); f(); }),10000);
+    }
+  }catch(e){}
+  location.reload();
+}
+function rejectText(r,s){
+  s=s||seasonInfo();
+  if(r.code==='closed'){
+    const head=[...(isDay(r.to)?[`${r.ver==='p1'?'これまでの':'先週の'}ステージは ${mdw(r.to)}23:59 で`,'締め切りました。']:['このステージは締め切りました。']),'この回は載りません。'];
+    return s.stale?[...head,...STALE_MSG,staleButton('rk-link')]:[...head,'次の回から今週のステージです'];
+  }
+  if(r.code==='not open') return ['この回は載りません。',...(isDay(r.from)?[`このステージは ${mdw(r.from)}からです`]:[])];
+  if(r.code==='course') return ['今週のステージが入れ替わっていたので、','この回は載りません'];
+  return null;
 }
 function reportRank(r){
   if(!r){ setStatus(Rank.pending?'記録はあとで送ります（いまはつながりません）':''); return; }
-  if(r.rejected){ setStatus('記録を送れませんでした'); return; }
+  if(r.rejected){ const t=rejectText(r); setStatus(t||'記録を送れませんでした'); refreshResultButton(); return; }
   if(r.gone){ setStatus(GONE_MSG); refreshResultButton(); return; }
   if(r.hidden) setStatus('記録を送りました');
-  else if(r.ranks&&r.ranks.today&&r.ranks.week) setStatus(`今日 ${r.ranks.today}位・今週 ${r.ranks.week}位・全期間 ${r.ranks.all}位`);
+  else if(r.ranks&&r.ranks.today&&r.ranks.week) setStatus(r.weekly?`今日 ${r.ranks.today}位・今週 ${r.ranks.week}位`:`今日 ${r.ranks.today}位・今週 ${r.ranks.week}位・全期間 ${r.ranks.all}位`);
   else setStatus(`ランキング ${r.rank} 位（${r.total} 人中）`);
 }
+function pushPending(){
+  if(!g||!Rank.joined||!Rank.pending) return;
+  Rank.push().then(r=>{
+    if(!r) return;
+    if(resultOpen()){ reportRank(r); return; }
+    const t=r.rejected?rejectText(r):null;
+    if(t){ toastQ.push({kind:'note',head:r.cleared>0?`送れていなかった記録（${r.cleared} 組）`:'送れていなかった記録',lines:t.filter(x=>typeof x==='string')}); showToast(); }
+  }).catch(()=>{});
+}
+let runStart=null;
 function onResult(o){
   const over=!!o.over;
   $('rkOpen').hidden=!over; $('psShare').hidden=!over; $('psRow').hidden=!over; setStatus('');
@@ -187,8 +346,12 @@ function onResult(o){
   if(over&&NATIVE&&NATIVE.gameOver){ try{ NATIVE.gameOver(); }catch(e){} }
   last=null; Rank.lastSent=null;
   if(!over) return;
+  const rs=runStart&&runStart.play===o.season?runStart:null;
+  if(!TRIAL&&rs&&!sendable(rs)&&o.cleared>=1){ setStatus(rs.stale?['この回は載りません。',...STALE_MSG,staleButton('rk-link')]:LOST_MSG); refreshResultButton(); return; }
   if(!TRIAL&&o.official&&o.cleared>=1&&Array.isArray(o.stages)&&o.stages.length===o.cleared){
-    last={cleared:o.cleared,stages:o.stages};
+    const ver=typeof o.ver==='string'&&o.ver?o.ver:verOf(o.season)||'p1', st=installed.get(o.season);
+    const cid=rs?(rs.cid&&rs.row&&rs.row.ver===ver?rs.cid:null):(st&&st.ok&&st.ver===ver?st.cid:null);
+    last={cleared:o.cleared,stages:o.stages,ver,...(cid?{cid}:{})};
     if(Rank.joined){
       Rank.enqueue(last); setStatus('記録を送っています…');
       Rank.push().then(reportRank).catch(()=>setStatus(''));
@@ -213,14 +376,35 @@ document.addEventListener('visibilitychange',()=>{ if(!document.hidden&&g&&g.pha
 function storageOK(){ try{ localStorage.setItem(KEY.probe,'1'); localStorage.removeItem(KEY.probe); return true; }catch(e){ return false; } }
 let rankSeq=0;
 const TABS=[['today','今日'],['week','今週'],['all','全期間']];
+const tabsNow=()=>{ const s=seasonInfo(); return s.row&&s.row.cid?TABS.slice(0,2):TABS; };
 let rankTab='today';
+let prevRow=null;
 const boardCache=new Map(), BOARD_TTL=20000;
-function badgeText(b){ const t=[]; if(b&&b.day) t.push(`🍷×${b.day}`); if(b&&b.week) t.push(`🏆×${b.week}`); return t.join(' '); }
+async function boardGet(ver,tab,limit){
+  const q=new URLSearchParams({ver,board:tab,limit:String(limit)});
+  if(Rank.joined) q.set('uid',Rank.state.uid);
+  const ck=`${ver}:${tab}:${limit}:${Rank.joined?Rank.state.uid:''}`, hit=boardCache.get(ck);
+  const r=hit&&Date.now()-hit.t<BOARD_TTL?hit.r:await Rank.call('GET',`/v1/board?${q}`);
+  if(!hit||hit.r!==r) boardCache.set(ck,{t:Date.now(),r});
+  return r;
+}
+const BADGE_MARKS=[['🍷','day'],['🏆','week']];
+function badgeText(b){ const t=[]; for(const [mark,k] of BADGE_MARKS) if(b&&b[k]>0) t.push(`${mark}×${b[k]}`); return t.join(' '); }
+function badgeEl(b){
+  const box=el('span','rk-badges');
+  for(const [mark,n] of BADGE_MARKS.map(([m,k])=>[m,b&&b[k]])){
+    if(!(n>0)) continue;
+    const one=el('span','rk-bd',mark); one.setAttribute('role','img'); one.setAttribute('aria-label',`${mark}×${n}`);
+    if(n>1) one.append(el('span','rk-bn',`×${n}`));
+    box.append(one);
+  }
+  return box.childNodes.length?box:null;
+}
 function renderTabs(show){
   const box=$('rkTabs'); if(!box) return;
   box.hidden=!show; box.innerHTML='';
   if(!show) return;
-  for(const [id,label] of TABS){
+  for(const [id,label] of tabsNow()){
     const b=el('button','rk-tab'+(id===rankTab?' on':''),label); b.type='button'; b.setAttribute('aria-pressed',String(id===rankTab));
     b.onclick=()=>{ if(rankTab===id) return; tap(); rankTab=id; openRank(); };
     box.append(b);
@@ -232,10 +416,12 @@ function openRank(view){
   if(sheet.hidden){ behind=Array.from($('app').children).filter(c=>c!==sheet&&!c.inert); for(const c of behind) c.inert=true; }
   sheet.hidden=false;
   const body=$('rankBody'); body.innerHTML=''; body.scrollTop=0;
-  const boardView=!(view==='join'||view==='rename'||view==='restore')&&!(!view&&Rank.needsTerms);
+  if(!tabsNow().some(([id])=>id===rankTab)) rankTab='today';
+  const boardView=!(view==='join'||view==='rename'||view==='restore'||view==='prev')&&!(!view&&Rank.needsTerms);
   renderTabs(boardView);
   if(view==='restore') renderRestore(body);
   else if(view==='join'||view==='rename') renderJoin(body,view==='rename');
+  else if(view==='prev'&&prevRow) renderPrev(body,my,prevRow);
   else if(!view&&Rank.needsTerms) renderNewTerms(body);
   else renderBoard(body,my);
   if(!sheet.contains(document.activeElement)){ const b=sheet.querySelector('button'); if(b) b.focus({preventScroll:true}); }
@@ -245,19 +431,40 @@ function closeRank(){
   for(const c of behind) c.inert=false;
   behind=[];
   if(resultOpen()) refreshResultButton();
+  reloadNow();
 }
+function boardList(body,top){
+  const list=el('ol','rk-list');
+  for(const e of top){
+    const li=el('li','rk-row'+(e.mine?' mine':''));
+    const score=el('span','rk-score'); score.append(el('b',null,String(e.cleared)),document.createTextNode(' 組'));
+    const who=el('span','rk-who'); who.append(nameFont(el('span','rk-name',e.name),e.name));
+    const be=badgeEl(e.badges); if(be) who.append(be);
+    li.append(el('span','rk-rank',String(e.rank)),who,score);
+    if(!e.mine&&Rank.joined){
+      li.classList.add('tap'); li.tabIndex=0; li.setAttribute('aria-expanded','false');
+      li.onclick=()=>rowDetail(list,li,e);
+      li.onkeydown=ev=>{ if(ev.target===li&&(ev.key==='Enter'||ev.key===' ')){ ev.preventDefault(); li.click(); } };
+    }
+    list.append(li);
+  }
+  body.append(list);
+  if(Rank.joined) body.append(el('p','rk-small','名前を押すと、通報・表示しないができます'));
+}
+function nbSpan(t){ const sp=/^[ 　]/.test(t); return el('span',sp?(t[0]===' '?'nb ps-sp':'nb ps-gap'):'nb',sp?t.slice(1):t); }
+function nbEl(tag,cls,parts){ const e=el(tag,cls); for(const t of parts) e.append(nbSpan(t)); return e; }
+const spanText=s=>`${mdw(s.from)}〜${s.to?mdw(s.to):''}`;
+function staleBox(cls){ const b=nbEl('div',cls,STALE_MSG); b.append(staleButton('btn ghost ps-mini')); return b; }
 async function renderBoard(body,my){
   body.append(el('p','rk-empty','読み込み中…'));
   try{
     if(Rank.joined) await Rank.push().catch(()=>{});
-    const tab=rankTab, q=new URLSearchParams({ver:VER,board:tab,limit:String(BOARD_SIZE)});
-    if(Rank.joined) q.set('uid',Rank.state.uid);
-    const ck=`${tab}:${Rank.joined?Rank.state.uid:''}`, hit=boardCache.get(ck);
-    const r=hit&&Date.now()-hit.t<BOARD_TTL?hit.r:await Rank.call('GET',`/v1/board?${q}`);
-    if(!hit||hit.r!==r) boardCache.set(ck,{t:Date.now(),r});
+    const s=seasonInfo(), weekly=!!(s.row&&s.row.cid), ver=curVer(s), tab=rankTab;
+    const r=await boardGet(ver,tab,BOARD_SIZE);
     if(my!==rankSeq) return;
     body.innerHTML='';
-    if(tab!=='all'&&r.board!==tab){ body.append(el('p','rk-empty','今日・今週のランキングは、もうすぐ始まります')); return; }
+    if(s.stale) body.append(staleBox('rk-stale'));
+    if(tab!=='all'&&r.board!==tab){ body.append(r.board==='closed'?nbEl('p','rk-empty',['このステージの','今日・今週のランキングは','締め切りました']):el('p','rk-empty','今日・今週のランキングは、もうすぐ始まります')); return; }
     if(tab==='week'&&r.from&&r.to){ const pd=el('p','rk-period'); pd.append(el('span','nb',`${mdw(r.from)}〜`),el('span','nb',mdw(r.to))); body.append(pd); }
     const head=el('div','rk-head');
     head.append(el('span',null,`${tab==='today'?'今日の参加':tab==='week'?'今週の参加':'参加'} ${r.total} 人`));
@@ -266,40 +473,55 @@ async function renderBoard(body,my){
     if(r.mine&&r.mine.hidden) body.append(el('p','rk-small','あなたの名前は運営が確認中のため、ほかの人には表示されていません'));
     const top=Array.isArray(r.top)?r.top:[];
     if(!top.length) body.append(el('p','rk-empty',tab==='today'?'今日は まだ誰の記録もありません。いちばん乗りのチャンス！':tab==='week'?'今週は まだ誰の記録もありません':'まだ誰の記録もありません'));
-    else {
-      const list=el('ol','rk-list');
-      for(const e of top){
-        const li=el('li','rk-row'+(e.mine?' mine':''));
-        const score=el('span','rk-score'); score.append(el('b',null,String(e.cleared)),document.createTextNode(' 組'));
-        const who=el('span','rk-who'); who.append(nameFont(el('span','rk-name',e.name),e.name));
-        const bt=badgeText(e.badges); if(bt) who.append(el('span','rk-badges',bt));
-        li.append(el('span','rk-rank',String(e.rank)),who,score);
-        if(!e.mine&&Rank.joined){
-          li.classList.add('tap'); li.tabIndex=0; li.setAttribute('aria-expanded','false');
-          li.onclick=()=>rowDetail(list,li,e);
-          li.onkeydown=ev=>{ if(ev.target===li&&(ev.key==='Enter'||ev.key===' ')){ ev.preventDefault(); li.click(); } };
-        }
-        list.append(li);
-      }
-      body.append(list);
-      if(Rank.joined) body.append(el('p','rk-small','名前を押すと、通報・表示しないができます'));
+    else boardList(body,top);
+    if(Rank.joined&&!top.some(e=>e.mine)){
+      const mp=el('p','rk-mine',r.myRank&&r.mine?`あなたは ${r.myRank} 位（${r.mine.cleared} 組）`:tab==='all'?'あなたの記録はまだありません。1 組でもご満足いただけると載ります':tab==='today'?'今日の記録はまだありません':'今週の記録はまだありません');
+      const be=r.myRank&&r.mine?badgeEl(r.mine.badges):null; if(be) mp.append(be);
+      body.append(mp);
     }
-    if(Rank.joined&&!top.some(e=>e.mine)) body.append(el('p','rk-mine',r.myRank&&r.mine?`あなたは ${r.myRank} 位（${r.mine.cleared} 組）${badgeText(r.mine.badges)?' '+badgeText(r.mine.badges):''}`:tab==='all'?'あなたの記録はまだありません。1 組でもご満足いただけると載ります':tab==='today'?'今日の記録はまだありません':'今週の記録はまだありません'));
     if(!Rank.joined){
-      const rec=last||Rank.pending;
-      if(rec){ if(!last) last=rec; const b=el('button','btn',`${rec.cleared} 組の記録を載せる`); b.onclick=()=>{ tap(); openRank('join'); }; body.append(b); }
+      const rec=last||Rank.pending, ok=!!rec&&rec.ver===ver;
+      if(ok){ if(!last) last=rec; const b=el('button','btn',`${rec.cleared} 組の記録を載せる`); b.onclick=()=>{ tap(); openRank('join'); }; body.append(b); }
       else body.append(el('p','rk-small','1 組でもご満足いただけると、終わったときの画面から記録を載せられます'));
       const back=el('button','rk-link','引き継ぎコードで戻す'); back.onclick=()=>{ tap(); openRank('restore'); }; body.append(back);
     }
-    const bx=el('p','rk-small rk-badgenote');
-    for(const t of ['ソムリエバッジ：','毎日 23:59 で締めて','その日の 1 位に🍷、','毎週木曜 23:59 で締めて','その週（金〜木）の 1 位に🏆を 1 個。',
-      'この端末の記録に付くので、','ランキングをやめたり',NATIVE?'アプリを消したりすると、':'ブラウザのデータが消えたりすると、','バッジも消えます。']) bx.append(el('span','nb',t));
+    const p=s.prev[0];
+    if(weekly&&tab==='week'&&p){ const b=el('button','rk-link rk-prevlink',p.cid?'先週の結果を見る':`${spanText(p)}の結果を見る`); b.onclick=()=>{ tap(); prevRow=p; openRank('prev'); }; body.append(b); }
+    const bx=nbEl('p','rk-small rk-badgenote',['ソムリエバッジ：','毎日 23:59 で締めて','その日の 1 位に🍷、','毎週木曜 23:59 で締めて','その週（金〜木）の 1 位に🏆を 1 個。',
+      ...(weekOn()?['ステージが替わっても残ります。']:[]),'この端末の記録に付くので、','ランキングをやめたり',NATIVE?'アプリを消したりすると、':'ブラウザのデータが消えたりすると、','バッジも消えます。']);
     body.append(bx);
   }catch(e){
     if(my!==rankSeq) return;
     body.innerHTML='';
     body.append(el('p','rk-empty','つながりませんでした'));
     const again=el('button','btn ghost','もう一度読む'); again.onclick=()=>{ tap(); openRank(); }; body.append(again);
+  }
+}
+async function renderPrev(body,my,row){
+  body.append(el('p','rk-empty','読み込み中…'));
+  const back=()=>{ const b=el('button','btn ghost','今週のランキングにもどる'); b.onclick=()=>{ tap(); rankTab='week'; openRank(); }; return b; };
+  try{
+    const r=await boardGet(row.ver,'all',BOARD_SIZE);
+    if(my!==rankSeq) return;
+    body.innerHTML='';
+    const sv=isObj(r.season)&&isDay(r.season.from)&&isDay(r.season.to)?r.season:row, week=!!row.cid;
+    body.append(el('p','rk-lead',week?'先週の結果':`${spanText(sv)}の結果`));
+    body.append(nbEl('p','rk-period rk-prevspan',week?[`${spanText(sv)}・`,`参加 ${r.total} 人`]:[`参加 ${r.total} 人`]));
+    const top=Array.isArray(r.top)?r.top:[], none=week?'先週の記録はありません':'この期間の記録はありません';
+    if(Rank.joined&&(top.length||r.myRank&&r.mine)){
+      const mp=el('p','rk-mine',r.myRank&&r.mine?`あなたは ${r.myRank} 位（${r.mine.cleared} 組）でした`:none);
+      const be=r.myRank&&r.mine?badgeEl(r.mine.badges):null; if(be) mp.append(be);
+      body.append(mp);
+    }
+    if(!top.length) body.append(el('p','rk-empty',none));
+    else boardList(body,top);
+    body.append(back());
+  }catch(e){
+    if(my!==rankSeq) return;
+    body.innerHTML='';
+    body.append(el('p','rk-empty','つながりませんでした'));
+    const again=el('button','btn ghost','もう一度読む'); again.onclick=()=>{ tap(); openRank('prev'); };
+    body.append(again,back());
   }
 }
 function rowDetail(list,li,e){
@@ -369,7 +591,7 @@ function renderJoin(body,renaming){
     tap(); go.disabled=true; go.textContent='送っています…';
     const my=rankSeq, err=await Rank.join(input.value);
     if(my!==rankSeq) return;
-    if(err){ msg.textContent=err; go.disabled=false; go.textContent=label; return; }
+    if(err){ msg.replaceChildren(...[].concat(err).map(t=>el('span','nb',t))); go.disabled=false; go.textContent=label; return; }
     openRank();
   };
   box.append(msg,go);
@@ -482,7 +704,7 @@ function renderStore(){
     return;
   }
   const price=(store&&store.price)||'¥300';
-  body.append(el('p','st-lead','上のバナーと、5 回遊び終えるごとの全画面の広告が出なくなります。'),el('p','rk-small','遊べる内容は変わりません。買い切りで、そのあとお金はかかりません。'));
+  body.append(el('p','st-lead','上のバナーと、3 回遊び終えるごとの全画面の広告が出なくなります。'),el('p','rk-small','遊べる内容は変わりません。買い切りで、そのあとお金はかかりません。'));
   const buy=el('button','btn',storeBusy==='buy'?'購入しています…':`広告を消す（${price}）`); buy.disabled=!!storeBusy;
   buy.onclick=()=>storeRun('buy');
   const st=el('p','rk-status',storeMsg); st.hidden=!storeMsg; st.setAttribute('aria-live','polite');
@@ -546,36 +768,141 @@ async function refreshMe(force){
   meAt=Date.now();
   const uid=Rank.state.uid;
   let r=null;
-  try{ r=await Rank.call('GET',`/v1/me?${new URLSearchParams({ver:VER,uid})}`); }
+  try{ r=await Rank.call('GET',`/v1/me?${new URLSearchParams({uid})}`); }
   catch(e){ if(e.status===409&&Rank.state.uid===uid) Rank.forget(); return; }
   if(!r||Rank.state.uid!==uid) return;
   const old=load(KEY.badges), first=!old, seen=new Set(old&&Array.isArray(old.seen)?old.seen:[]);
-  const fresh=(r.recent||[]).filter(x=>!seen.has(`${x.kind}:${x.key}`)&&(!first||Date.now()-x.at<3*86400000));
-  for(const x of r.recent||[]) seen.add(`${x.kind}:${x.key}`);
-  save(KEY.badges,{day:r.badges.day,week:r.badges.week,seen:[...seen].slice(-60)});
-  showBadges(r.badges);
+  const all=(Array.isArray(r.recent)?r.recent:[]).filter(x=>isObj(x)&&(x.kind==='day'||x.kind==='week')).sort((a,b)=>(b.at||0)-(a.at||0));
+  const fresh=all.filter(x=>!seen.has(`${x.kind}:${x.key}`)&&(!first||clock()-x.at<3*86400000));
+  for(const x of all) seen.add(`${x.kind}:${x.key}`);
+  const b=isObj(r.badges)?r.badges:{};
+  save(KEY.badges,{day:b.day||0,week:b.week||0,seen:[...seen].slice(-60)});
+  showBadges(b);
   if(fresh.length){ toastQ.push(...fresh.reverse()); showToast(); }
+}
+let startQueued=0, startWait=false;
+function hasHistory(){
+  if(Rank.joined) return true;
+  const b=load(KEY.bests), sv=load(KEY.save);
+  return (isObj(b)&&Object.keys(b).some(k=>+b[k]>0))||(isObj(sv)&&sv.bestStage>0);
+}
+async function seasonNotice(s){
+  if(TRIAL||!g||!s.cid||!s.row||s.play!==s.row.n) return;
+  const n=s.play;
+  if(n<=(Number(sz.seen)||0)||startQueued>=n) return;
+  if(!hasHistory()){ putSeason({seen:n,intro:1}); return; }
+  startQueued=n;
+  const item={kind:'start',n,prev:s.prev[0]||null,mine:null,intro:!sz.intro};
+  if(Rank.joined&&item.prev){
+    startWait=true;
+    try{ const r=await Rank.call('GET',`/v1/board?${new URLSearchParams({ver:item.prev.ver,board:'all',uid:Rank.state.uid,limit:'1'})}`); if(r&&r.myRank&&r.mine) item.mine={rank:r.myRank,cleared:r.mine.cleared}; }catch(e){}
+    startWait=false;
+  }
+  toastQ.unshift(item); showToast();
 }
 function showToast(){
   const t=$('psToast'); if(!t||!toastQ.length||!t.hidden) return;
   if(!g||g.phase()!=='title') return;
+  if(!seasonSettled||startWait) return;
   if(document.hidden){ if(!showToast.wait){ showToast.wait=true; document.addEventListener('visibilitychange',function v(){ if(document.hidden) return; document.removeEventListener('visibilitychange',v); showToast.wait=false; showToast(); }); } return; }
-  const items=toastQ.splice(0);
   t.innerHTML='';
-  t.append(el('b',null,items.length>1?`ソムリエバッジを ${items.length} 個もらいました`:'ソムリエバッジをもらいました'));
-  for(const x of items){
-    const when=x.kind==='day'?`${mdw(x.from)}の 1 位`:`${mdOf(x.from)}〜${mdOf(x.to)} の週の 1 位`;
-    t.append(el('span',null,`${x.kind==='day'?'🍷':'🏆'} ${when}（${x.cleared} 組）`));
+  let wait=7000;
+  t.classList.toggle('long',toastQ[0].kind==='start');
+  if(toastQ[0].kind==='note'){
+    const x=toastQ.shift();
+    t.append(el('b',null,x.head),nbEl('span',null,x.lines));
+    wait=10000;
+  } else if(toastQ[0].kind==='start'){
+    const x=toastQ.shift();
+    t.append(el('b',null,'今週のステージが始まりました'));
+    if(x.intro) t.append(nbEl('span',null,['これからは毎週金曜に、','ステージが替わります']));
+    t.append(nbEl('span',null,['グラスの並びが替わり、','ランキングも新しく数えます']),nbEl('span',null,['🍷🏆 のソムリエバッジは',' そのまま残ります']));
+    if(x.mine&&x.prev) t.append(nbEl('span',null,[x.prev.cid?'先週のあなたは':`${mdOf(x.prev.from)}〜${mdOf(x.prev.to)} のあなたは`,` ${x.mine.rank} 位（${x.mine.cleared} 組）でした`]));
+    putSeason({seen:Math.max(x.n,Number(szBase().seen)||0),intro:1});
+    wait=10000;
+  } else {
+    let k=toastQ.findIndex(x=>x.kind==='start'||x.kind==='note'); if(k<0) k=toastQ.length;
+    const items=toastQ.splice(0,k);
+    t.append(el('b',null,items.length>1?`ソムリエバッジを ${items.length} 個もらいました`:'ソムリエバッジをもらいました'));
+    for(const x of items){
+      const when=x.kind==='day'?`${mdw(x.from)}の 1 位`:`${mdOf(x.from)}〜${mdOf(x.to)} の週の 1 位`;
+      t.append(el('span',null,`${x.kind==='day'?'🍷':'🏆'} ${when}（${x.cleared} 組）`));
+    }
   }
   t.append(el('small',null,'押すと閉じます'));
-  t.hidden=false; void t.offsetWidth; t.classList.add('on');
+  t.hidden=false; placeToast(t); void t.offsetWidth; t.classList.add('on');
   let closed=false;
   const close=()=>{ if(closed) return; closed=true; clearTimeout(showToast.tm); t.classList.remove('on'); setTimeout(()=>{ t.hidden=true; showToast(); },250); };
   t.onclick=()=>{ tap(); close(); };
   showToast.close=close;
-  clearTimeout(showToast.tm); showToast.tm=setTimeout(close,7000);
+  clearTimeout(showToast.tm); showToast.tm=setTimeout(close,wait);
+}
+function placeToast(t){
+  t.style.top='';
+  try{
+    const h=document.querySelector('#title h1'), st=$('btnStart');
+    if(!h||!st||h.offsetParent===null) return;
+    const app=$('app').getBoundingClientRect(), tb=t.getBoundingClientRect(), hb=h.getBoundingClientRect(), sb=st.getBoundingClientRect();
+    if(tb.bottom<=hb.top) return;
+    const top=hb.bottom+8;
+    if(top+tb.height<=sb.top-8) t.style.top=`${Math.round(top-app.top)}px`;
+  }catch(e){}
 }
 function toastAway(p){ if(p!=='title'&&showToast.close) showToast.close(); }
+function seasonLine(s){
+  if(s.lost) return ['今週のステージを','受け取れていません','（つながると新しくなります）'];
+  const r=s.row; if(s.stale||!r) return null;
+  if(r.cid) return s.cid?(r.to===s.day?['今週のステージは',' 今日の 23:59 まで']:['今週のステージ',`　${spanText(r)}`]):null;
+  if(r.to&&s.next) return r.to===s.day?['今のステージは',' 今日の 23:59 まで']:['今のステージは',` ${mdw(r.to)}まで`];
+  return null;
+}
+let seasonSig='';
+const sigOf=s=>`${s.play}|${s.stale}|${s.lost}|${s.wait}|${(seasonLine(s)||[]).join('')}`;
+function renderSeasonLine(s){
+  const box=$('psSeason'); if(!box) return;
+  box.replaceChildren(); box.className='ps-season';
+  if(s.stale){ box.classList.add('stale'); box.append(staleBox('ps-stale')); box.hidden=false; return; }
+  const parts=seasonLine(s);
+  if(parts) for(const t of parts) box.append(nbSpan(t));
+  box.hidden=!parts;
+}
+function seasonUpdate(){
+  installWeeks();
+  const s=seasonInfo(); seasonSig=sigOf(s);
+  renderSeasonLine(s);
+  try{ if(g&&g.titleRefresh) g.titleRefresh(); }catch(e){}
+  seasonNotice(s);
+}
+let titleTm=0, tickDay='';
+function titleTick(){
+  clearTimeout(titleTm); titleTm=0;
+  if(!g||g.phase()!=='title') return;
+  const inst=installWeeks(), s=seasonInfo();
+  if(sigOf(s)!==seasonSig){ seasonUpdate(); askSeason(true); }
+  else if(inst) seasonUpdate();
+  else if(tickDay&&s.day!==tickDay) askSeason(true);
+  else if(s.lost||Date.now()-seasonAskAt>30*60000) askSeason(false);
+  tickDay=s.day;
+  const toMidnight=DAY_MS-((serverNow()+JST_MS)%DAY_MS);
+  titleTm=setTimeout(titleTick,Math.max(1000,Math.min(60000,toMidnight+400)));
+}
+let reloadWanted=false;
+function reloadNow(){
+  if(!reloadWanted||!g||g.phase()!=='title') return false;
+  for(const id of ['rankSheet','storeSheet','quitSheet']){ const s=$(id); if(s&&!s.hidden) return false; }
+  reloadWanted=false; location.reload(); return true;
+}
+if(!NATIVE&&'serviceWorker' in navigator){
+  try{
+    navigator.serviceWorker.addEventListener('message',e=>{
+      const d=e.data; if(!isObj(d)||d.type!=='ps-update') return;
+      const ack={type:'ps-update-ack'};
+      try{ if(e.ports&&e.ports[0]) e.ports[0].postMessage(ack); else if(e.source&&e.source.postMessage) e.source.postMessage(ack); }catch(_){}
+      reloadWanted=true; reloadNow();
+    });
+    if(navigator.serviceWorker.startMessages) navigator.serviceWorker.startMessages();
+  }catch(e){}
+}
 const SHEET_HTML=`
 <div id="rankSheet" class="rk-overlay" hidden><div class="rsheet" role="dialog" aria-modal="true" aria-labelledby="rkTitle">
   <p class="cap">ライフ 3 つ · ご満足いただけた組の数</p>
@@ -590,19 +917,21 @@ function build(){
   { const b=$('rankBody'); b.addEventListener('scroll',moreHint,{passive:true});
     new MutationObserver(moreHint).observe(b,{childList:true,subtree:true,characterData:true});
     if(typeof ResizeObserver!=='undefined') new ResizeObserver(moreHint).observe(b); }
+  const sl=el('div','ps-season'); sl.id='psSeason'; sl.hidden=true; sl.setAttribute('aria-live','polite'); $('btnStart').before(sl);
   const tb=el('button','btn ghost','ランキング'); tb.id='rkTitleBtn'; $('btnStart').after(tb);
   tb.onclick=()=>{ if(!g||g.phase()!=='title') return; tap(); openRank(); };
   const st=el('p','rk-status'); st.id='rkStatus'; st.hidden=true; st.setAttribute('aria-live','polite');
   const ob=el('button','btn ghost','ランキングを見る'); ob.id='rkOpen'; ob.hidden=true;
   const row=el('div','ps-row2'); row.id='psRow'; row.hidden=true; row.append(ob);
   const btns=$('btnRetry').parentNode; btns.before(st); $('btnRetry').after(row);
-  ob.onclick=()=>{ if(!g||g.phase()!=='result') return; tap(); openRank(!Rank.joined&&last?'join':undefined); };
+  ob.onclick=()=>{ if(!g||g.phase()!=='result') return; tap(); openRank(!Rank.joined&&lastOk()?'join':undefined); };
   const sh=el('button','btn ghost','結果をシェア'); sh.id='psShare'; sh.hidden=true; row.append(sh);
   sh.onclick=()=>{ if(!g||g.phase()!=='result') return; tap(); share(); };
   const foot=el('p','ps-foot'); foot.innerHTML=`${VERSION_LABEL}${NATIVE?'<span id="psAdsSep" hidden> · </span><button id="psAdsLink" type="button" hidden>広告を消す</button>':''}${!NATIVE&&IOS_DEVICE?` · <a id="psAppLink" href="${APP_URL}" target="_blank" rel="noopener">iPhone版（App Store）</a>`:''} · <a href="${NATIVE?(NATIVE.privacyURL||SITE_URL+'privacy.html'):'privacy.html'}">プライバシー</a>`;
   $('tBest').after(foot);
   const bl=el('p','ps-badges'); bl.id='psBadges'; bl.hidden=true; $('tBest').after(bl);
   { const c=load(KEY.badges); if(Rank.joined&&c) showBadges(c); }
+  renderSeasonLine(seasonInfo());
   const toast=el('div','ps-toast'); toast.id='psToast'; toast.hidden=true; toast.setAttribute('role','status'); $('app').append(toast);
   if(!storageOK()){ const n=el('p','ps-note','このタブでは記録が残りません（シークレットのタブなど）'); foot.before(n); }
   for(const id of ['btnStart','btnRetry','btnNext']) $(id).addEventListener('click',wake);
@@ -631,22 +960,37 @@ function build(){
 }
 window.addEventListener('storage',e=>{
   if(e.key===KEY.rank) Rank.state=load(KEY.rank)||{};
-  if(e.key===KEY.pending) Rank.pending=load(KEY.pending);
+  if(e.key===KEY.pending||e.key===KEY.pendingOld) Rank.pending=loadPending();
+  if(e.key===KEY.season){ sz=loadSeason(); installWeeks(); if(g&&g.phase()==='title') titleTick(); }
 });
-window.addEventListener('online',()=>{ if(g&&Rank.joined&&Rank.pending) Rank.push().then(r=>{ if(r&&resultOpen()) reportRank(r); }).catch(()=>{}); });
+document.addEventListener('visibilitychange',()=>{ if(document.hidden||!g) return; askSeason(false); titleTick(); });
+window.addEventListener('online',pushPending);
+function readSeasons(x){
+  const m={};
+  if(isObj(x)) for(const k of Object.keys(x)){ const n=Number(k), v=x[k]; if(Number.isInteger(n)&&n>0&&isObj(v)&&typeof v.ver==='string') m[n]=v.ver; }
+  return Object.keys(m).length?m:{1:'p1'};
+}
 window.PS_WEB={
   attach(api){
-    g=api; build(); persist(); refreshMe(true);
-    if(Rank.joined&&Rank.pending) Rank.push().catch(()=>{});
+    g=api;
+    seasonMap=readSeasons(api.seasons); seasonDef=Number.isInteger(api.seasonDefault)?api.seasonDefault:1;
+    if(JSON.stringify(sz.known)!==JSON.stringify(seasonMap)) putSeason({known:seasonMap});
+    build(); persist(); refreshMe(true);
+    pushPending();
+    seasonUpdate(); titleTick(); askSeason(true);
+    reloadNow();
     if('serviceWorker' in navigator&&location.protocol==='https:') navigator.serviceWorker.register('sw.js').catch(()=>{});
   },
+  seasonNow(){ try{ const n=seasonInfo().play; return Number.isInteger(n)?n:seasonDef; }catch(e){ return seasonDef; } },
+  dayNow(){ try{ return jstDay(serverNow()); }catch(e){ return jstDay(Date.now()); } },
   onResult,
   haptic:NATIVE?(name,p)=>{ try{ NATIVE.haptic(name,p); }catch(e){} }:undefined,
-  onRunStart:NATIVE?()=>{ try{ NATIVE.runStart(!!(g&&g.soundOn&&g.soundOn())); }catch(e){} }:undefined,
+  onRunStart(){ try{ installWeeks(); runStart=seasonInfo(); }catch(e){ runStart=null; } if(NATIVE){ try{ NATIVE.runStart(!!(g&&g.soundOn&&g.soundOn())); }catch(e){} } },
+  runOfficial(){ try{ installWeeks(); return sendable(seasonInfo()); }catch(e){ return true; } },
   hold(on){ try{ if(g&&g.hold) g.hold(!!on); }catch(e){} },
-  onTitle(){ last=null; sleepOK(); if($('rankSheet')) closeRank(); closeQuit(); refreshMe(false); showToast(); },
+  onTitle(){ last=null; sleepOK(); if($('rankSheet')) closeRank(); closeQuit(); if(reloadNow()) return; refreshMe(false); if(g){ askSeason(false); titleTick(); seasonNotice(seasonInfo()); } showToast(); },
   onPhase(p){ toastAway(p); if(NATIVE){ quitButton(); if(!quitOK()) closeQuit(); } },
   onStore(s){ if(!s) return; store=s; storeLink(); if($('storeSheet')&&!$('storeSheet').hidden&&!storeBusy) renderStore(); },
 };
-if(LOCAL) window.PS_WEB._rank=Rank;
+if(LOCAL){ window.PS_WEB._rank=Rank; window.PS_WEB._season={info:seasonInfo,ask:askSeason,clock,serverNow,installed}; }
 })();

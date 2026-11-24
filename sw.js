@@ -1,7 +1,7 @@
-const VERSION = '1873e4c7da81';
+const VERSION = 'daba633e9a98';
 const PRECACHE = [
   './',
-  'v/1873e4c7da81/app.css',
+  'v/daba633e9a98/app.css',
   'assets/fonts/cormorant-italic.woff',
   'assets/fonts/cormorant.woff',
   'assets/fonts/shippori-500.woff',
@@ -15,9 +15,9 @@ const PRECACHE = [
   'assets/licenses/OFL-ShipporiMincho.txt',
   'assets/licenses/three.js-LICENSE.txt',
   'index.html',
-  'v/1873e4c7da81/js/app.js',
-  'v/1873e4c7da81/js/three.module.js',
-  'v/1873e4c7da81/js/web.js',
+  'v/daba633e9a98/js/app.js',
+  'v/daba633e9a98/js/three.module.js',
+  'v/daba633e9a98/js/web.js',
   'manifest.webmanifest',
   'privacy.html',
 ];
@@ -27,16 +27,47 @@ self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(fresh)).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', (e) => {
-  e.waitUntil(
-    caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k.startsWith('pourfectsommelier-') && k !== CACHE).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim()),
-  );
+  e.waitUntil((async () => {
+    const keys = await caches.keys();
+    const old = keys.filter((k) => k.startsWith('pourfectsommelier-') && k !== CACHE);
+    await Promise.all(old.map((k) => caches.delete(k)));
+    await self.clients.claim();
+    if (old.length) await tellPages();
+  })());
 });
+const ASK_MS = 2000;
+function isGameUrl(href) {
+  try {
+    const scope = new URL(self.registration.scope).pathname;
+    const p = new URL(href).pathname;
+    return p === scope || p === `${scope}index.html`;
+  } catch (e) { return false; }
+}
+function ask(client) {
+  return new Promise((resolve) => {
+    let done = false;
+    const end = (v) => { if (!done) { done = true; resolve(v); } };
+    setTimeout(() => end(false), ASK_MS);
+    try {
+      const ch = new MessageChannel();
+      ch.port1.onmessage = (m) => { if (m.data && m.data.type === 'ps-update-ack') end(true); };
+      client.postMessage({ type: 'ps-update' }, [ch.port2]);
+    } catch (e) { end(false); }
+  });
+}
+async function tellPages() {
+  try {
+    const list = (await self.clients.matchAll({ type: 'window' })).filter((c) => isGameUrl(c.url));
+    const answered = await Promise.all(list.map(ask));
+    list.forEach((c, i) => {
+      if (answered[i] || c.visibilityState === 'hidden' || typeof c.navigate !== 'function') return;
+      try { Promise.resolve(c.navigate(c.url)).catch(() => {}); } catch (e) {}
+    });
+  } catch (e) {}
+}
 function isGamePage(req, url) {
   if (req.mode !== 'navigate') return false;
-  const scope = new URL(self.registration.scope).pathname;
-  return url.pathname === scope || url.pathname === `${scope}index.html`;
+  return isGameUrl(url.href);
 }
 self.addEventListener('fetch', (e) => {
   const req = e.request;
